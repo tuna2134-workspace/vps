@@ -104,6 +104,17 @@ is not running, etc.
 ## Console
 
 `POST /v1/vms/{id}/console` (VM must be running) issues a single-use, expiring
-token. The noVNC client connects to the console gateway WebSocket; the gateway
-validates the token and bridges to the VM's VNC endpoint. The VNC listener is
-bound to loopback on the agent and is never published to the internet.
+token. Clients connect to the console gateway WebSocket; the gateway validates
+the token and bridges to the VM's console endpoint.
+
+Two console types are supported:
+
+- **VNC** (`console_type: "vnc"`) — graphical console for noVNC. The VNC
+  listener is bound to loopback on the agent (auto-allocated port + password)
+  and is never published to the internet. The gateway bridges the WebSocket to
+  the TCP endpoint.
+- **Serial** (`console_type: "serial"`) — text console over the domain's serial
+  PTY. The agent reports the PTY path (`/dev/pts/N`, parsed from the running
+  domain XML via the official libvirt-go-xml bindings); the gateway bridges the
+  WebSocket to the Unix domain socket. The PTY path is never exposed to the
+  client.

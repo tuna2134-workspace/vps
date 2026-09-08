@@ -176,6 +176,8 @@ message HeartbeatResponse {
 message GetConsoleTokenRequest {
   string vm_id = 1;
   string vm_name = 2;
+  // Console type: "vnc" or "serial".
+  string console_type = 3;
 }
 
 message GetConsoleTokenResponse {
@@ -184,6 +186,8 @@ message GetConsoleTokenResponse {
   uint32 port = 2;
   // One-time token that the VNC proxy validates before connecting.
   string token = 3;
+  // PTY path for serial consoles (e.g. "/dev/pts/3").
+  string serial_path = 4;
 }
 
 message OperationResponse {

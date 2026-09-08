@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bufio"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -109,6 +111,28 @@ type statusWriter struct {
 func (s *statusWriter) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack lets WebSocket upgrades pass through the logging wrapper.
+func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := s.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	return h.Hijack()
+}
+
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (s *statusWriter) Push(target string, opts *http.PushOptions) error {
+	if p, ok := s.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
 }
 
 // bearerToken extracts the token from the Authorization header.

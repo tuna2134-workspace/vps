@@ -74,6 +74,11 @@ DNS servers come from the network record and are written into the cloud-init
 
 ## Console networking
 
-VNC is bound to `127.0.0.1` on the agent with an auto-allocated port and a
-password. The Control Plane issues a one-time token; the console gateway
-proxies a WebSocket to the VNC port. VNC is never exposed publicly.
+- **VNC** is bound to `127.0.0.1` on the agent with an auto-allocated port and
+  a password. The Control Plane issues a one-time token; the console gateway
+  proxies a WebSocket to the VNC TCP port.
+- **Serial** consoles use the domain's `<serial type='pty'>` device. The agent
+  reports the PTY path from the running domain XML; the gateway proxies a
+  WebSocket to the Unix domain socket.
+
+Neither VNC nor the serial PTY is ever exposed publicly.

@@ -13,6 +13,7 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.8
 	github.com/stripe/stripe-go/v81 v81.4.0
 	golang.org/x/crypto v0.50.0
+	golang.org/x/sys v0.43.0
 	google.golang.org/grpc v1.82.2
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
@@ -43,7 +44,6 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 )

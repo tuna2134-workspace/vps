@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -15,18 +17,28 @@ func NewConsoleTokenRepository(db DBTX) *ConsoleTokenRepository {
 	return &ConsoleTokenRepository{db: db}
 }
 
+const consoleTokenCols = `id, vm_id, user_id, token_hash, console_type, host, port, path, expires_at, used_at, created_at`
+
+func scanConsoleToken(row pgx.Row) (*models.ConsoleToken, error) {
+	var t models.ConsoleToken
+	if err := row.Scan(&t.ID, &t.VMID, &t.UserID, &t.TokenHash, &t.ConsoleType,
+		&t.Host, &t.Port, &t.Path, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 func (r *ConsoleTokenRepository) Create(ctx context.Context, t *models.ConsoleToken) (*models.ConsoleToken, error) {
 	row := r.db.QueryRow(ctx, `
-		INSERT INTO console_tokens (vm_id, user_id, token_hash, console_type, host, port, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, vm_id, user_id, token_hash, console_type, host, port, expires_at, used_at, created_at`,
-		t.VMID, t.UserID, t.TokenHash, t.ConsoleType, t.Host, t.Port, t.ExpiresAt)
-	var out models.ConsoleToken
-	if err := row.Scan(&out.ID, &out.VMID, &out.UserID, &out.TokenHash, &out.ConsoleType,
-		&out.Host, &out.Port, &out.ExpiresAt, &out.UsedAt, &out.CreatedAt); err != nil {
+		INSERT INTO console_tokens (vm_id, user_id, token_hash, console_type, host, port, path, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING `+consoleTokenCols,
+		t.VMID, t.UserID, t.TokenHash, t.ConsoleType, t.Host, t.Port, t.Path, t.ExpiresAt)
+	created, err := scanConsoleToken(row)
+	if err != nil {
 		return nil, fmt.Errorf("create console token: %w", err)
 	}
-	return &out, nil
+	return created, nil
 }
 
 // Consume atomically validates and marks a token as used. It enforces
@@ -35,17 +47,16 @@ func (r *ConsoleTokenRepository) Consume(ctx context.Context, tokenHash string) 
 	row := r.db.QueryRow(ctx, `
 		UPDATE console_tokens SET used_at = now()
 		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
-		RETURNING id, vm_id, user_id, token_hash, console_type, host, port, expires_at, used_at, created_at`,
+		RETURNING `+consoleTokenCols,
 		tokenHash)
-	var out models.ConsoleToken
-	if err := row.Scan(&out.ID, &out.VMID, &out.UserID, &out.TokenHash, &out.ConsoleType,
-		&out.Host, &out.Port, &out.ExpiresAt, &out.UsedAt, &out.CreatedAt); err != nil {
+	consumed, err := scanConsoleToken(row)
+	if err != nil {
 		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("consume console token: %w", err)
 	}
-	return &out, nil
+	return consumed, nil
 }
 
 func (r *ConsoleTokenRepository) RevokeByVM(ctx context.Context, vmID string) error {

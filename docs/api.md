@@ -150,17 +150,19 @@ Send an `Idempotency-Key` header (or an `idempotency_key` field) when creating
 a VM. Replaying the same key returns the original operation and never creates a
 second VM.
 
-## Console (noVNC)
+## Console (noVNC / serial)
 
-1. `POST /v1/vms/{id}/console` returns a one-time token + websocket URL.
-2. The noVNC client connects to the websocket URL.
-3. The gateway validates the token and bridges the socket to the VM's VNC
-   endpoint (which is never exposed to the client).
+1. `POST /v1/vms/{id}/console` returns a one-time token + websocket URL. Set
+   `console_type` to `vnc` (graphical, noVNC) or `serial` (text console).
+2. The client connects to the websocket URL.
+3. The gateway validates the token and bridges the socket to the VM's console
+   endpoint — TCP for VNC, a Unix domain socket for the serial PTY. Neither is
+   ever exposed to the client.
 
 ```json
 {
   "data": {
-    "console_type": "vnc",
+    "console_type": "serial",
     "token": "5xt9...",
     "expires_at": "2026-09-08T03:02:00Z",
     "websocket_url": "wss://panel.example.com/console/ws?token=5xt9..."

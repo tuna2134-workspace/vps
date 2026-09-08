@@ -1,6 +1,6 @@
 // Package console implements short-lived, single-use console access tokens
 // for VM VNC/serial consoles. The token flow authorizes access through the
-// Control Plane before any connection to the agent's VNC endpoint.
+// Control Plane before any connection to the agent's console endpoint.
 package console
 
 import (
@@ -22,16 +22,25 @@ var (
 	ErrExpired  = errors.New("token expired or already used")
 )
 
-// ConsoleInfo describes how to reach a VM's console.
-type ConsoleInfo struct {
+// Console type constants.
+const (
+	TypeVNC    = "vnc"
+	TypeSerial = "serial"
+)
+
+// Endpoint describes how to reach a VM's console. Exactly one of
+// (Host, Port) or Path is set depending on the console type.
+type Endpoint struct {
 	ConsoleType string
 	Host        string
 	Port        int
+	// PTY path used for serial consoles.
+	Path string
 }
 
 // AgentClient is the agent API used to fetch console addressing.
 type AgentClient interface {
-	GetConsoleToken(ctx context.Context, endpoint, vmID, vmName string) (host string, port int, err error)
+	GetConsoleToken(ctx context.Context, endpoint, vmID, vmName, consoleType string) (*Endpoint, error)
 }
 
 // Service issues and consumes console tokens.
@@ -59,17 +68,23 @@ func NewService(
 	}
 }
 
-// Issue requests a VNC console token for a VM owned by the user. The agent's
-// VNC endpoint is never exposed to the user; the token authorizes the console
-// gateway to proxy to it.
-func (s *Service) Issue(ctx context.Context, userID, vmID, vmName, nodeEndpoint string) (*models.ConsoleToken, string, error) {
+// Issue requests a console token for a VM owned by the user. The agent's
+// console endpoint is never exposed to the user; the token authorizes the
+// console gateway to proxy to it.
+func (s *Service) Issue(ctx context.Context, userID, vmID, vmName, nodeEndpoint, consoleType string) (*models.ConsoleToken, string, error) {
 	if s.agents == nil {
 		return nil, "", errors.New("console backend not configured")
 	}
 	if nodeEndpoint == "" {
 		return nil, "", errors.New("vm has no agent endpoint")
 	}
-	host, port, err := s.agents.GetConsoleToken(ctx, nodeEndpoint, vmID, vmName)
+	if consoleType == "" {
+		consoleType = TypeVNC
+	}
+	if consoleType != TypeVNC && consoleType != TypeSerial {
+		return nil, "", fmt.Errorf("unsupported console type: %s", consoleType)
+	}
+	ep, err := s.agents.GetConsoleToken(ctx, nodeEndpoint, vmID, vmName, consoleType)
 	if err != nil {
 		return nil, "", fmt.Errorf("request console endpoint: %w", err)
 	}
@@ -82,9 +97,10 @@ func (s *Service) Issue(ctx context.Context, userID, vmID, vmName, nodeEndpoint 
 		VMID:        vmID,
 		UserID:      userID,
 		TokenHash:   session.TokenFromString(token).Hash(),
-		ConsoleType: "vnc",
-		Host:        host,
-		Port:        port,
+		ConsoleType: consoleType,
+		Host:        ep.Host,
+		Port:        ep.Port,
+		Path:        ep.Path,
 		ExpiresAt:   time.Now().Add(s.ttl),
 	})
 	if err != nil {
@@ -95,6 +111,7 @@ func (s *Service) Issue(ctx context.Context, userID, vmID, vmName, nodeEndpoint 
 		Action:       "console.token_issued",
 		ResourceType: "vm",
 		ResourceID:   vmID,
+		Metadata:     map[string]any{"console_type": consoleType},
 	})
 	return tok, token, nil
 }
@@ -108,7 +125,8 @@ func (s *Service) Consume(ctx context.Context, token string) (*models.ConsoleTok
 	return tok, nil
 }
 
-// WebsocketURL builds the gateway websocket URL a noVNC client connects to.
+// WebsocketURL builds the gateway websocket URL a noVNC/console client
+// connects to.
 func (s *Service) WebsocketURL(baseURL, token string) string {
 	return fmt.Sprintf("%s/console/ws?token=%s", baseURL, token)
 }

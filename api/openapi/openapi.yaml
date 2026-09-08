@@ -785,11 +785,13 @@ paths:
   /v1/vms/{id}/console:
     post:
       tags: [Console]
-      summary: Obtain a one-time VNC console token
+      summary: Obtain a one-time console token (VNC or serial)
       description: >
         The returned token authorizes a WebSocket connection to the console
         gateway at `websocket_url`. Tokens are single-use and expire quickly.
-        The underlying VNC endpoint is never exposed to the client.
+        The underlying VNC endpoint / serial PTY is never exposed to the
+        client. Choose the console with `console_type` (`vnc` for a graphical
+        console via noVNC, `serial` for a text console over a Unix socket).
       operationId: getVMConsole
       security:
         - bearerAuth: []
@@ -805,6 +807,7 @@ paths:
                   type: string
                   enum: [vnc, serial]
                   default: vnc
+                  description: "vnc = graphical (noVNC), serial = text console"
       responses:
         "200":
           description: Console access
@@ -815,16 +818,19 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/ConsoleAccess"
+        "400":
+          description: Unsupported console_type
         "409":
           description: VM is not running
   /console/ws:
     get:
       tags: [Console]
-      summary: Console WebSocket gateway (noVNC)
+      summary: Console WebSocket gateway (noVNC / serial)
       description: >
-        WebSocket endpoint that a noVNC client connects to. The one-time
-        `token` query parameter is validated before the gateway bridges the
-        socket to the VM's VNC port.
+        WebSocket endpoint that a noVNC or serial console client connects to.
+        The one-time `token` query parameter is validated before the gateway
+        bridges the socket to the VM's console endpoint (TCP for VNC, a Unix
+        domain socket for serial consoles).
       operationId: consoleWebsocket
       parameters:
         - name: token

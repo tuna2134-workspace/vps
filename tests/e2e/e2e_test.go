@@ -30,6 +30,7 @@ import (
 	"github.com/tuna2134/vps/internal/controlplane/auth"
 	"github.com/tuna2134/vps/internal/controlplane/billing"
 	"github.com/tuna2134/vps/internal/controlplane/cluster"
+	"github.com/tuna2134/vps/internal/controlplane/console"
 	"github.com/tuna2134/vps/internal/controlplane/database"
 	"github.com/tuna2134/vps/internal/controlplane/grpcclient"
 	"github.com/tuna2134/vps/internal/controlplane/macalloc"
@@ -110,6 +111,7 @@ type e2eTest struct {
 	planSvc     *plans.Service
 	netSvc      *networks.Service
 	billingSvc  *billing.Service
+	consoleSvc  *console.Service
 	agentServer *grpcserver.Server
 	agentFake   *agentlibvirt.FakeManager
 	factory     *agents.Factory
@@ -174,6 +176,8 @@ func setupE2E(t *testing.T) *e2eTest {
 	macGen := macalloc.NewGenerator(pool.VMs)
 	billingSvc := billing.NewService("", "", pool.Billing, auditSvc, log)
 
+	consoleSvc := console.NewService(pool.ConsoleTokens, &e2eConsoleAgent{factory: factory}, time.Minute, auditSvc, "http://localhost:8080")
+
 	vmSvc := vms.NewService(pool.VMs, pool.Operations, pool.Nodes, pool.Plans, netSvc, sched, macGen, auditSvc, provisioner, func(ctx context.Context, userID string) (bool, error) {
 		return true, nil
 	})
@@ -194,10 +198,32 @@ func setupE2E(t *testing.T) *e2eTest {
 
 	return &e2eTest{
 		userSvc: userSvc, vmSvc: vmSvc, clusterSvc: clusterSvc, planSvc: planSvc,
-		netSvc: netSvc, billingSvc: billingSvc, agentServer: agentServer,
-		agentFake: fake, factory: factory, agentAddr: lis.Addr().String(),
-		provisioner: provisioner,
+		netSvc: netSvc, billingSvc: billingSvc, consoleSvc: consoleSvc,
+		agentServer: agentServer, agentFake: fake, factory: factory,
+		agentAddr: lis.Addr().String(), provisioner: provisioner,
 	}
+}
+
+// e2eConsoleAgent adapts the agent factory to the console service.
+type e2eConsoleAgent struct {
+	factory *agents.Factory
+}
+
+func (a *e2eConsoleAgent) GetConsoleToken(ctx context.Context, endpoint, vmID, vmName, consoleType string) (*console.Endpoint, error) {
+	client, err := a.factory.Client(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.GetConsoleToken(ctx, &agentv1.GetConsoleTokenRequest{VmId: vmID, VmName: vmName, ConsoleType: consoleType}, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &console.Endpoint{
+		ConsoleType: consoleType,
+		Host:        resp.GetHost(),
+		Port:        int(resp.GetPort()),
+		Path:        resp.GetSerialPath(),
+	}, nil
 }
 
 func TestEndToEndProvisioningFlow(t *testing.T) {
@@ -329,6 +355,37 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 	// which validates the ISO magic bytes).
 	if cidata := te.agentFake.VolumeDataFile("default", "vps-"+vm.ID+"-cloudinit"); cidata == "" {
 		t.Error("cloud-init volume has no uploaded data")
+	}
+
+	// 8c. Console tokens: VNC and serial both issue and consume correctly.
+	vncTok, vncRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vm.Name, te.agentAddr, console.TypeVNC)
+	if err != nil {
+		t.Fatalf("issue vnc console: %v", err)
+	}
+	if vncTok.ConsoleType != console.TypeVNC || vncTok.Port == 0 {
+		t.Errorf("vnc token wrong: %+v", vncTok)
+	}
+	consumedVNC, err := te.consoleSvc.Consume(ctx, vncRaw)
+	if err != nil {
+		t.Fatalf("consume vnc token: %v", err)
+	}
+	if consumedVNC.VMID != vm.ID {
+		t.Errorf("consumed vnc token vm mismatch: %s", consumedVNC.VMID)
+	}
+
+	serialTok, serialRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vm.Name, te.agentAddr, console.TypeSerial)
+	if err != nil {
+		t.Fatalf("issue serial console: %v", err)
+	}
+	if serialTok.ConsoleType != console.TypeSerial || serialTok.Path == "" {
+		t.Errorf("serial token wrong: %+v", serialTok)
+	}
+	consumedSerial, err := te.consoleSvc.Consume(ctx, serialRaw)
+	if err != nil {
+		t.Fatalf("consume serial token: %v", err)
+	}
+	if consumedSerial.ConsoleType != console.TypeSerial || consumedSerial.Path == "" {
+		t.Errorf("consumed serial token wrong: %+v", consumedSerial)
 	}
 
 	// 9. Stop the VM.

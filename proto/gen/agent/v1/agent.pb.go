@@ -1129,9 +1129,11 @@ func (x *HeartbeatResponse) GetOk() bool {
 }
 
 type GetConsoleTokenRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	VmName        string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	VmId   string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	VmName string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	// Console type: "vnc" or "serial".
+	ConsoleType   string `protobuf:"bytes,3,opt,name=console_type,json=consoleType,proto3" json:"console_type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1180,13 +1182,22 @@ func (x *GetConsoleTokenRequest) GetVmName() string {
 	return ""
 }
 
+func (x *GetConsoleTokenRequest) GetConsoleType() string {
+	if x != nil {
+		return x.ConsoleType
+	}
+	return ""
+}
+
 type GetConsoleTokenResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// VNC host to connect to (reachable from the console gateway).
 	Host string `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
 	Port uint32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	// One-time token that the VNC proxy validates before connecting.
-	Token         string `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	Token string `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	// PTY path for serial consoles (e.g. "/dev/pts/3").
+	SerialPath    string `protobuf:"bytes,4,opt,name=serial_path,json=serialPath,proto3" json:"serial_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1238,6 +1249,13 @@ func (x *GetConsoleTokenResponse) GetPort() uint32 {
 func (x *GetConsoleTokenResponse) GetToken() string {
 	if x != nil {
 		return x.Token
+	}
+	return ""
+}
+
+func (x *GetConsoleTokenResponse) GetSerialPath() string {
+	if x != nil {
+		return x.SerialPath
 	}
 	return ""
 }
@@ -1388,14 +1406,17 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12-\n" +
 	"\x06status\x18\x03 \x01(\v2\x15.common.v1.NodeStatusR\x06status\"#\n" +
 	"\x11HeartbeatResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"F\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"i\n" +
 	"\x16GetConsoleTokenRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
-	"\avm_name\x18\x02 \x01(\tR\x06vmName\"W\n" +
+	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12!\n" +
+	"\fconsole_type\x18\x03 \x01(\tR\vconsoleType\"x\n" +
 	"\x17GetConsoleTokenResponse\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12\x14\n" +
-	"\x05token\x18\x03 \x01(\tR\x05token\"l\n" +
+	"\x05token\x18\x03 \x01(\tR\x05token\x12\x1f\n" +
+	"\vserial_path\x18\x04 \x01(\tR\n" +
+	"serialPath\"l\n" +
 	"\x11OperationResponse\x12/\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x19.common.v1.OperationStateR\x05state\x12&\n" +
 	"\x05error\x18\x02 \x01(\v2\x10.common.v1.ErrorR\x05error2\xca\x05\n" +

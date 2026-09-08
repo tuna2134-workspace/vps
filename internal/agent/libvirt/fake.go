@@ -16,6 +16,15 @@ type FakeManager struct {
 	nodeInfo    *NodeInfo
 	calls       []string
 	autoProduce bool
+	serialPath  string
+}
+
+// SetSerialInfo configures the PTY path returned by GetSerialInfo (used by
+// tests to point the serial console at a real pty).
+func (f *FakeManager) SetSerialInfo(ptyPath string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serialPath = ptyPath
 }
 
 type fakeDomain struct {
@@ -177,6 +186,15 @@ func (f *FakeManager) GetDomainDisks(name string) ([]DiskInfo, error) {
 
 func (f *FakeManager) GetVNCInfo(name string) (string, int, error) {
 	return "127.0.0.1", 5900, nil
+}
+
+func (f *FakeManager) GetSerialInfo(name string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.serialPath != "" {
+		return f.serialPath, nil
+	}
+	return "/dev/pts/0", nil
 }
 
 func (f *FakeManager) CreateVolume(pool, name string, capacityBytes uint64) (*VolumeInfo, error) {

@@ -93,6 +93,7 @@ type Manager interface {
 	GetDomainInterfaces(name string) ([]InterfaceInfo, error)
 	GetDomainDisks(name string) ([]DiskInfo, error)
 	GetVNCInfo(name string) (host string, port int, err error)
+	GetSerialInfo(name string) (ptyPath string, err error)
 
 	// Storage.
 	CreateVolume(pool, name string, capacityBytes uint64) (*VolumeInfo, error)
@@ -411,6 +412,15 @@ func (a *Adapter) GetVNCInfo(name string) (string, int, error) {
 		return "", 0, err
 	}
 	return parseVNCInfo(xml)
+}
+
+// GetSerialInfo parses the domain XML for the serial console PTY path.
+func (a *Adapter) GetSerialInfo(name string) (string, error) {
+	xml, err := a.GetDomainXML(name)
+	if err != nil {
+		return "", err
+	}
+	return parseSerialInfo(xml)
 }
 
 func (a *Adapter) CreateVolume(pool, name string, capacityBytes uint64) (*VolumeInfo, error) {

@@ -62,3 +62,26 @@ func parseVNCInfo(xmlDoc string) (string, int, error) {
 	}
 	return "", 0, fmt.Errorf("domain has no vnc graphics device")
 }
+
+// parseSerialInfo extracts the serial console PTY path from a domain XML
+// document. The PTY path only exists after the domain is running.
+func parseSerialInfo(xmlDoc string) (string, error) {
+	var d libvirtxml.Domain
+	if err := d.Unmarshal(xmlDoc); err != nil {
+		return "", fmt.Errorf("parse domain xml: %w", err)
+	}
+	if d.Devices == nil {
+		return "", fmt.Errorf("domain has no serial device")
+	}
+	for _, s := range d.Devices.Serials {
+		if s.Source != nil && s.Source.Pty != nil && s.Source.Pty.Path != "" {
+			return s.Source.Pty.Path, nil
+		}
+	}
+	for _, c := range d.Devices.Consoles {
+		if c.Source != nil && c.Source.Pty != nil && c.Source.Pty.Path != "" {
+			return c.Source.Pty.Path, nil
+		}
+	}
+	return "", fmt.Errorf("domain has no pty serial console")
+}

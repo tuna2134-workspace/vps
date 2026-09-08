@@ -29,8 +29,9 @@ func NewConsoleHandlers(consoleSvc *console.Service, vmSvc *vms.Service) *Consol
 }
 
 // IssueVMConsole is POST /v1/vms/{id}/console. It verifies VM ownership then
-// returns a one-time, expiring token plus the websocket URL a noVNC client
-// connects to. The agent's VNC port is never returned to the user.
+// returns a one-time, expiring token plus the websocket URL a noVNC or serial
+// client connects to. The agent's console endpoint is never returned to the
+// user.
 func (h *ConsoleHandlers) IssueVMConsole(w http.ResponseWriter, r *http.Request) {
 	u := UserFrom(r.Context())
 	vmID := pathSegment(r, "/v1/vms/")
@@ -47,13 +48,25 @@ func (h *ConsoleHandlers) IssueVMConsole(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	consoleType := console.TypeVNC
+	if r.Body != nil {
+		var req consoleRequest
+		if err := decodeJSON(r, &req); err == nil && req.ConsoleType != "" {
+			consoleType = req.ConsoleType
+		}
+	}
+	if consoleType != console.TypeVNC && consoleType != console.TypeSerial {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "console_type must be vnc or serial")
+		return
+	}
+
 	nodeEndpoint, err := h.vms.NodeEndpoint(r.Context(), vm.NodeID)
 	if err != nil {
 		mapError(w, err)
 		return
 	}
 
-	tok, rawToken, err := h.console.Issue(r.Context(), u.ID, vm.ID, vm.Name, nodeEndpoint)
+	tok, rawToken, err := h.console.Issue(r.Context(), u.ID, vm.ID, vm.Name, nodeEndpoint, consoleType)
 	if err != nil {
 		mapError(w, err)
 		return

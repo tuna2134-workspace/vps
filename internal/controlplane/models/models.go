@@ -312,6 +312,7 @@ type ConsoleToken struct {
 	ConsoleType string     `json:"console_type"`
 	Host        string     `json:"-"`
 	Port        int        `json:"-"`
+	Path        string     `json:"-"`
 	ExpiresAt   time.Time  `json:"expires_at"`
 	UsedAt      *time.Time `json:"used_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`

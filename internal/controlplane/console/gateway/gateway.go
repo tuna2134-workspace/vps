@@ -1,7 +1,8 @@
-// Package gateway implements the console WebSocket gateway. A noVNC client
-// connects to /console/ws?token=...; the gateway validates the one-time token
-// and bridges the WebSocket to the VM's VNC TCP endpoint. The VNC server is
-// never exposed directly to clients.
+// Package gateway implements the console WebSocket gateway. A noVNC/serial
+// client connects to /console/ws?token=...; the gateway validates the one-time
+// token and bridges the WebSocket to the VM's console endpoint. VNC endpoints
+// are TCP, serial consoles are Unix domain sockets. Neither is ever exposed
+// directly to clients.
 package gateway
 
 import (
@@ -17,9 +18,10 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/tuna2134/vps/internal/controlplane/console"
+	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
-// Gateway bridges authenticated WebSockets to VNC TCP endpoints.
+// Gateway bridges authenticated WebSockets to console endpoints.
 type Gateway struct {
 	cons    *console.Service
 	log     *slog.Logger
@@ -31,13 +33,22 @@ func New(cons *console.Service, log *slog.Logger) *Gateway {
 }
 
 // HandleWS is the HTTP handler for /console/ws. The one-time token is passed
-// as a query parameter by the noVNC client.
+// as a query parameter by the noVNC/serial client. The token is consumed
+// atomically BEFORE the WebSocket upgrade, so invalid, expired, or reused
+// tokens are rejected with 401 at the handshake.
 func (g *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		http.Error(w, "missing console token", http.StatusUnauthorized)
 		return
 	}
+	tok, err := g.cons.Consume(r.Context(), token)
+	if err != nil {
+		g.log.Warn("console token rejected", "error", err)
+		http.Error(w, "invalid, expired, or already-used console token", http.StatusUnauthorized)
+		return
+	}
+
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: false,
 		OriginPatterns:     []string{"*"},
@@ -51,31 +62,24 @@ func (g *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Hour)
 	defer cancel()
 
-	if err := g.proxy(ctx, ws, token); err != nil {
+	if err := g.proxy(ctx, ws, tok); err != nil {
 		g.log.Info("console websocket closed", "error", err)
 	}
 }
 
-func (g *Gateway) proxy(ctx context.Context, ws *websocket.Conn, rawToken string) error {
-	tok, err := g.cons.Consume(ctx, rawToken)
+func (g *Gateway) proxy(ctx context.Context, ws *websocket.Conn, tok *models.ConsoleToken) error {
+	conn, err := g.dial(ctx, tok)
 	if err != nil {
-		g.log.Warn("console token rejected", "error", err)
-		return errors.New("invalid or expired console token")
-	}
-
-	addr := net.JoinHostPort(tok.Host, strconv.Itoa(tok.Port))
-	conn, err := net.DialTimeout("tcp", addr, g.timeout)
-	if err != nil {
-		g.log.Warn("console tcp dial failed", "vm", tok.VMID, "error", err)
+		g.log.Warn("console dial failed", "vm", tok.VMID, "type", tok.ConsoleType, "error", err)
 		return err
 	}
 	defer conn.Close()
 
-	g.log.Info("console session established", "vm", tok.VMID, "target", addr)
+	g.log.Info("console session established", "vm", tok.VMID, "type", tok.ConsoleType)
 
 	errCh := make(chan error, 2)
 
-	// WebSocket -> VNC
+	// WebSocket -> console
 	go func() {
 		for {
 			typ, data, err := ws.Read(ctx)
@@ -93,7 +97,7 @@ func (g *Gateway) proxy(ctx context.Context, ws *websocket.Conn, rawToken string
 		}
 	}()
 
-	// VNC -> WebSocket
+	// Console -> WebSocket
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -117,5 +121,27 @@ func (g *Gateway) proxy(ctx context.Context, ws *websocket.Conn, rawToken string
 			return nil
 		}
 		return err
+	}
+}
+
+// dial connects to the console endpoint: TCP for VNC, Unix socket for serial.
+func (g *Gateway) dial(ctx context.Context, tok *models.ConsoleToken) (net.Conn, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+
+	switch tok.ConsoleType {
+	case console.TypeSerial:
+		if tok.Path == "" {
+			return nil, errors.New("serial console has no pty path")
+		}
+		d := net.Dialer{}
+		return d.DialContext(timeoutCtx, "unix", tok.Path)
+	default:
+		if tok.Host == "" || tok.Port == 0 {
+			return nil, errors.New("vnc console has no host/port")
+		}
+		addr := net.JoinHostPort(tok.Host, strconv.Itoa(tok.Port))
+		d := net.Dialer{}
+		return d.DialContext(timeoutCtx, "tcp", addr)
 	}
 }

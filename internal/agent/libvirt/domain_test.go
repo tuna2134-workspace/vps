@@ -108,6 +108,60 @@ func TestParseVNCInfo(t *testing.T) {
 	}
 }
 
+func TestParseSerialInfo(t *testing.T) {
+	// A running domain exposes the PTY path in its live XML. Simulate that.
+	xml := `<domain type='kvm'>
+  <name>vps-serial</name>
+  <devices>
+    <serial type='pty'>
+      <source path='/dev/pts/7'/>
+      <target type='isa-serial' port='0'>
+        <model name='isa-serial'/>
+      </target>
+    </serial>
+    <console type='pty'>
+      <source path='/dev/pts/7'/>
+      <target type='serial' port='0'/>
+    </console>
+  </devices>
+</domain>`
+	pty, err := parseSerialInfo(xml)
+	if err != nil {
+		t.Fatalf("parseSerialInfo: %v", err)
+	}
+	if pty != "/dev/pts/7" {
+		t.Errorf("expected /dev/pts/7, got %q", pty)
+	}
+}
+
+func TestParseSerialInfoMissing(t *testing.T) {
+	xml := `<domain type='kvm'><name>x</name><devices/></domain>`
+	if _, err := parseSerialInfo(xml); err == nil {
+		t.Error("expected error when no serial pty exists")
+	}
+}
+
+func TestDomainHasSerialConsole(t *testing.T) {
+	xml, err := GenerateDomainXML(DomainConfig{
+		Name: "vps-serial-cfg", MemoryBytes: 1 << 30, VCPU: 1,
+		Disks:      []DomainDisk{{Device: "disk", Type: "file", Source: "/tmp/x.qcow2", Driver: "qcow2", TargetDev: "vda", Writable: true}},
+		Interfaces: []DomainInterface{{Bridge: "br0", MACAddress: "02:00:00:00:00:03"}},
+	})
+	if err != nil {
+		t.Fatalf("GenerateDomainXML: %v", err)
+	}
+	var d libvirtxml.Domain
+	if err := d.Unmarshal(xml); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(d.Devices.Serials) == 0 || d.Devices.Serials[0].Source == nil || d.Devices.Serials[0].Source.Pty == nil {
+		t.Fatalf("generated domain must include a pty serial console: %s", xml)
+	}
+	if len(d.Devices.Consoles) == 0 || d.Devices.Consoles[0].Source == nil || d.Devices.Consoles[0].Source.Pty == nil {
+		t.Fatalf("generated domain must include a pty console: %s", xml)
+	}
+}
+
 func TestGenerateDomainXMLRequiresInterface(t *testing.T) {
 	_, err := GenerateDomainXML(DomainConfig{Name: "x", MemoryBytes: 1 << 30, VCPU: 1})
 	if err == nil || !strings.Contains(err.Error(), "interface") {

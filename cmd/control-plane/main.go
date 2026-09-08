@@ -288,14 +288,23 @@ type agentConsoleAdapter struct {
 	factory *agents.Factory
 }
 
-func (a *agentConsoleAdapter) GetConsoleToken(ctx context.Context, endpoint, vmID, vmName string) (string, int, error) {
+func (a *agentConsoleAdapter) GetConsoleToken(ctx context.Context, endpoint, vmID, vmName, consoleType string) (*console.Endpoint, error) {
 	client, err := a.factory.Client(ctx, endpoint)
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
-	resp, err := client.GetConsoleToken(ctx, &agentv1.GetConsoleTokenRequest{VmId: vmID, VmName: vmName}, 15*time.Second)
+	resp, err := client.GetConsoleToken(ctx, &agentv1.GetConsoleTokenRequest{
+		VmId:        vmID,
+		VmName:      vmName,
+		ConsoleType: consoleType,
+	}, 15*time.Second)
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
-	return resp.GetHost(), int(resp.GetPort()), nil
+	return &console.Endpoint{
+		ConsoleType: consoleType,
+		Host:        resp.GetHost(),
+		Port:        int(resp.GetPort()),
+		Path:        resp.GetSerialPath(),
+	}, nil
 }
