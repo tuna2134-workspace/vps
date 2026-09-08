@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.5
+	github.com/stripe/stripe-go/v81 v81.4.0
 	golang.org/x/crypto v0.50.0
 	google.golang.org/grpc v1.82.2
 	google.golang.org/protobuf v1.36.12
