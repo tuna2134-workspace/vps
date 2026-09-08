@@ -177,7 +177,7 @@ func isForeignKeyViolation(err error) bool {
 // isNoRowsOrInvalidUUID returns true when a query failed because the row does
 // not exist or the id was not a valid UUID. Both should surface as NotFound.
 func isNoRowsOrInvalidUUID(err error) bool {
-	if isNoRowsOrInvalidUUID(err) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return true
 	}
 	var pgErr *pgconn.PgError
