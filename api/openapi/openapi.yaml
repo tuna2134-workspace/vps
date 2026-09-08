@@ -16,10 +16,10 @@ info:
     clients poll `GET /v1/operations/{id}` until the status is terminal.
   contact:
     name: Platform Engineering
-  servers:
-    - url: http://localhost:8080
-      description: Local development
-  tags:
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
     - name: Authentication
     - name: Users
     - name: VMs
@@ -635,7 +635,7 @@ paths:
                   image_id: 6b17cffa-8f80-441a-b7fb-b22a414f4cdc
                   hostname: web-01
                   ssh_keys:
-                    - ssh-ed25519 AAAA...
+                    - - "ssh-ed25519 AAAA..."
       responses:
         "202":
           description: Provisioning started
@@ -647,8 +647,8 @@ paths:
                   data:
                     type: object
                     example:
-                      operation_id: 4f6d1a2b-...
-                      vm_id: 3e7d9c5c-...
+                      operation_id: "4f6d1a2b-..."
+                      vm_id: "3e7d9c5c-..."
                     properties:
                       operation_id:
                         type: string
@@ -874,12 +874,10 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
-                    oneOf:
-                      - $ref: "#/components/schemas/Subscription"
-                      - type: "null"
+                allOf:
+                  - $ref: "#/components/schemas/Subscription"
+                  - type: object
+                    nullable: true
     post:
       tags: [Billing]
       summary: Create a Stripe subscription
@@ -1134,7 +1132,7 @@ components:
       type: object
       example:
         data:
-          token: 6mxd5m8JqfjR9V...
+          token: "6mxd5m8JqfjR9V..."
           expires_at: "2026-09-09T04:00:00Z"
       properties:
         data:
@@ -1143,7 +1141,7 @@ components:
           properties:
             token:
               type: string
-              description: Opaque bearer token (sent as Authorization: Bearer <token>)
+              description: "Opaque bearer token (sent as Authorization: Bearer <token>)"
             expires_at:
               type: string
               format: date-time
@@ -1151,13 +1149,13 @@ components:
       type: object
       example:
         data:
-          id: 4f6d1a2b-...
-          user_id: 6b17cffa-...
+          id: "4f6d1a2b-..."
+          user_id: "6b17cffa-..."
           created_at: "2026-09-08T03:00:00Z"
           expires_at: "2026-09-09T03:00:00Z"
           last_seen_at: "2026-09-08T03:00:00Z"
           ip: 203.0.113.7
-          user_agent: Mozilla/5.0...
+          user_agent: "Mozilla/5.0..."
       properties:
         data:
           type: object
@@ -1189,7 +1187,7 @@ components:
       type: object
       example:
         data:
-          id: 6b17cffa-...
+          id: "6b17cffa-..."
           name: starter
           vcpu: 2
           memory_mb: 2048
@@ -1265,7 +1263,7 @@ components:
       type: object
       example:
         data:
-          id: 6b17cffa-...
+          id: "6b17cffa-..."
           name: public
           bridge: br-public
           ipv4_cidr: 203.0.113.0/24
@@ -1368,8 +1366,8 @@ components:
       type: object
       example:
         data:
-          id: 6b17cffa-...
-          cluster_id: 6b17cffa-...
+          id: "6b17cffa-..."
+          cluster_id: "6b17cffa-..."
           name: node-01
           agent_endpoint: node-01.internal:9001
           status: healthy
@@ -1441,8 +1439,8 @@ components:
       type: object
       example:
         data:
-          id: 3e7d9c5c-...
-          user_id: 6b17cffa-...
+          id: "3e7d9c5c-..."
+          user_id: "6b17cffa-..."
           name: web-01
           hostname: web-01
           status: running
@@ -1498,8 +1496,8 @@ components:
       type: object
       example:
         data:
-          id: 4f6d1a2b-...
-          vm_id: 3e7d9c5c-...
+          id: "4f6d1a2b-..."
+          vm_id: "3e7d9c5c-..."
           operation_type: create
           status: succeeded
           created_at: "2026-09-08T03:00:00Z"
@@ -1534,9 +1532,9 @@ components:
       example:
         data:
           console_type: vnc
-          token: 5xt9...
+          token: "5xt9..."
           expires_at: "2026-09-08T03:02:00Z"
-          websocket_url: wss://panel.example.com/console/ws?token=5xt9...
+          websocket_url: "wss://panel.example.com/console/ws?token=5xt9..."
       properties:
         data:
           type: object
