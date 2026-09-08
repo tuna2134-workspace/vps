@@ -3,11 +3,13 @@ module github.com/tuna2134/vps
 go 1.27.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-iptables v0.8.0
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.5
+	github.com/joho/godotenv v1.5.1
 	github.com/shirou/gopsutil/v4 v4.26.8
 	github.com/stripe/stripe-go/v81 v81.4.0
 	golang.org/x/crypto v0.50.0

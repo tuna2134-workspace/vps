@@ -157,7 +157,7 @@ func (m *IptablesManager) DeleteVM(vmID string) error {
 	for _, ipt := range []*iptables.IPTables{m.ipv4, m.ipv6} {
 		jump := []string{"-j", vmChain}
 		// Delete the jump rule first, then flush and remove the chain.
-		if ipt.Exists(tableFilter, platformChain, jump...) == nil {
+		if exists, _ := ipt.Exists(tableFilter, platformChain, jump...); exists {
 			if err := ipt.Delete(tableFilter, platformChain, jump...); err != nil {
 				return fmt.Errorf("delete vm jump %s: %w", vmChain, err)
 			}

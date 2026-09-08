@@ -26,7 +26,7 @@ func NewFactory(opts grpcclient.Options) *Factory {
 }
 
 // Client returns a cached or new agent client for the endpoint.
-func (f *Factory) Client(ctx context.Context, endpoint string) (vms.AgentClient, error) {
+func (f *Factory) Client(ctx context.Context, endpoint string) (*grpcclient.Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c, ok := f.clients[endpoint]; ok {

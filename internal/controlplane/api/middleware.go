@@ -2,6 +2,7 @@ package api
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"runtime/debug"
@@ -121,13 +122,19 @@ func bearerToken(r *http.Request) string {
 }
 
 // remoteIP returns the client IP, preferring the X-Forwarded-For header when
-// behind a trusted proxy.
+// behind a trusted proxy. The port is always stripped.
 func remoteIP(r *http.Request) string {
+	raw := r.RemoteAddr
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if i := strings.IndexByte(xff, ','); i > 0 {
-			return strings.TrimSpace(xff[:i])
+			raw = xff[:i]
+		} else {
+			raw = xff
 		}
-		return strings.TrimSpace(xff)
 	}
-	return strings.TrimSpace(r.RemoteAddr)
+	raw = strings.TrimSpace(raw)
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		return host
+	}
+	return raw
 }

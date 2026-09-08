@@ -104,6 +104,8 @@ type Manager interface {
 
 	// Node.
 	GetNodeInfo() (*NodeInfo, error)
+	// EnsurePoolActive refreshes the storage pool so new volumes are visible.
+	EnsurePoolActive(pool string) error
 }
 
 // Adapter is the real libvirt implementation.

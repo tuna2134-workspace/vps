@@ -28,6 +28,7 @@ type Dependencies struct {
 	Clusters   *cluster.Service
 	Billing    *billing.Service
 	Console    *console.Service
+	ConsoleWS  http.HandlerFunc
 	ReadyCheck func(ctx context.Context) error
 }
 
@@ -53,6 +54,11 @@ func NewRouter(deps Dependencies, log *slog.Logger) http.Handler {
 	// Health / readiness
 	r.Get("/healthz", health.Liveness)
 	r.Get("/readyz", health.Readiness)
+
+	// Console websocket gateway (public; one-time token required).
+	if deps.ConsoleWS != nil {
+		r.Get("/console/ws", deps.ConsoleWS)
+	}
 
 	// Auth (public)
 	r.Post("/v1/auth/register", authHandlers.Register)

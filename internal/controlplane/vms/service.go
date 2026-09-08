@@ -29,33 +29,43 @@ var (
 	ErrAgentUnavailable = errors.New("agent unavailable")
 )
 
+// BillingGate is implemented by the billing layer to enforce that a user has
+// an active subscription before provisioning.
+type BillingGate func(ctx context.Context, userID string) (bool, error)
+
 type Service struct {
-	vms        *repositories.VMRepository
-	ops        *repositories.OperationRepository
-	networks   *networks.Service
-	scheduler  *scheduler.Scheduler
-	mac        *macalloc.Generator
-	audit      *audit.Service
+	vms         *repositories.VMRepository
+	ops         *repositories.OperationRepository
+	nodes       *repositories.NodeRepository
+	networks    *networks.Service
+	scheduler   *scheduler.Scheduler
+	mac         *macalloc.Generator
+	audit       *audit.Service
 	provisioner *Provisioner
+	billingGate BillingGate
 }
 
 func NewService(
 	vms *repositories.VMRepository,
 	ops *repositories.OperationRepository,
+	nodes *repositories.NodeRepository,
 	networkSvc *networks.Service,
 	sched *scheduler.Scheduler,
 	macGen *macalloc.Generator,
 	auditSvc *audit.Service,
 	provisioner *Provisioner,
+	billingGate BillingGate,
 ) *Service {
 	return &Service{
 		vms:         vms,
 		ops:         ops,
+		nodes:       nodes,
 		networks:    networkSvc,
 		scheduler:   sched,
 		mac:         macGen,
 		audit:       auditSvc,
 		provisioner: provisioner,
+		billingGate: billingGate,
 	}
 }
 
@@ -90,6 +100,17 @@ func (s *Service) CreateVM(ctx context.Context, userID string, req CreateRequest
 			return nil, op, err
 		}
 		return vm, op, nil
+	}
+
+	// Billing status check.
+	if s.billingGate != nil {
+		ok, err := s.billingGate(ctx, userID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			return nil, nil, ErrBillingRequired
+		}
 	}
 
 	// Scheduler decides placement based on requested resources.
@@ -260,6 +281,18 @@ func (s *Service) GetOperation(ctx context.Context, userID, operationID string) 
 		}
 	}
 	return op, nil
+}
+
+// NodeEndpoint returns the agent endpoint for a node ID.
+func (s *Service) NodeEndpoint(ctx context.Context, nodeID string) (string, error) {
+	if nodeID == "" {
+		return "", ErrNotFound
+	}
+	node, err := s.nodes.GetByID(ctx, nodeID)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	return node.AgentEndpoint, nil
 }
 
 // WaitForOperation polls until the operation reaches a terminal state or the

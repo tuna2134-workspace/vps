@@ -3,11 +3,11 @@ package metrics
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
 
 	"github.com/tuna2134/vps/internal/agent/libvirt"
@@ -38,7 +38,7 @@ func NewProvider(manager libvirt.Manager) *Provider {
 func (p *Provider) Sample() (*Snapshot, error) {
 	s := &Snapshot{Healthy: true}
 
-	if hostname, err := host.Hostname(); err == nil {
+	if hostname, err := os.Hostname(); err == nil {
 		s.Hostname = hostname
 	}
 

@@ -47,7 +47,13 @@ func (h *ConsoleHandlers) IssueVMConsole(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tok, rawToken, err := h.console.Issue(r.Context(), u.ID, vm.ID, vm.Name)
+	nodeEndpoint, err := h.vms.NodeEndpoint(r.Context(), vm.NodeID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	tok, rawToken, err := h.console.Issue(r.Context(), u.ID, vm.ID, vm.Name, nodeEndpoint)
 	if err != nil {
 		mapError(w, err)
 		return

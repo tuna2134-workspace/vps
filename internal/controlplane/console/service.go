@@ -29,15 +29,15 @@ type ConsoleInfo struct {
 	Port        int
 }
 
-// AgentConsoleClient is the agent API used to fetch console addressing.
-type AgentConsoleClient interface {
-	GetConsoleToken(ctx context.Context, vmID, vmName string) (host string, port int, token string, err error)
+// AgentClient is the agent API used to fetch console addressing.
+type AgentClient interface {
+	GetConsoleToken(ctx context.Context, endpoint, vmID, vmName string) (host string, port int, err error)
 }
 
 // Service issues and consumes console tokens.
 type Service struct {
 	tokens  *repositories.ConsoleTokenRepository
-	agents  AgentConsoleClient
+	agents  AgentClient
 	ttl     time.Duration
 	audit   *audit.Service
 	baseURL string
@@ -45,7 +45,7 @@ type Service struct {
 
 func NewService(
 	tokens *repositories.ConsoleTokenRepository,
-	agents AgentConsoleClient,
+	agents AgentClient,
 	ttl time.Duration,
 	auditSvc *audit.Service,
 	publicBaseURL string,
@@ -59,14 +59,17 @@ func NewService(
 	}
 }
 
-// Issue requests a VNC console token for a VM owned by the user.
-// The agent's VNC endpoint is never exposed directly to the user; the token
-// authorizes the console gateway to proxy to it.
-func (s *Service) Issue(ctx context.Context, userID, vmID, vmName string) (*models.ConsoleToken, string, error) {
+// Issue requests a VNC console token for a VM owned by the user. The agent's
+// VNC endpoint is never exposed to the user; the token authorizes the console
+// gateway to proxy to it.
+func (s *Service) Issue(ctx context.Context, userID, vmID, vmName, nodeEndpoint string) (*models.ConsoleToken, string, error) {
 	if s.agents == nil {
 		return nil, "", errors.New("console backend not configured")
 	}
-	host, port, _, err := s.agents.GetConsoleToken(ctx, vmID, vmName)
+	if nodeEndpoint == "" {
+		return nil, "", errors.New("vm has no agent endpoint")
+	}
+	host, port, err := s.agents.GetConsoleToken(ctx, nodeEndpoint, vmID, vmName)
 	if err != nil {
 		return nil, "", fmt.Errorf("request console endpoint: %w", err)
 	}
