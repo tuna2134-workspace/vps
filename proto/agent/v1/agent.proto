@@ -1,0 +1,192 @@
+syntax = "proto3";
+
+package agent.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/tuna2134/vps/proto/gen/agent/v1;agentv1";
+
+// AgentService is the service exposed by an Agent running on a compute node.
+// The Control Plane calls this service to manage VMs and collect node state.
+service AgentService {
+  // CreateVM provisions a new VM on the node (import image, attach volumes,
+  // configure network, define and start the domain).
+  rpc CreateVM(CreateVMRequest) returns (OperationResponse);
+  // DeleteVM tears down a VM and cleans up all associated resources
+  // (volumes, iptables rules, IPAM binding cleanup).
+  rpc DeleteVM(DeleteVMRequest) returns (OperationResponse);
+  // StartVM powers on a previously defined VM.
+  rpc StartVM(StartVMRequest) returns (OperationResponse);
+  // StopVM gracefully shuts down a running VM.
+  rpc StopVM(StopVMRequest) returns (OperationResponse);
+  // ForceStopVM forcefully powers off a running VM.
+  rpc ForceStopVM(ForceStopVMRequest) returns (OperationResponse);
+  // RebootVM reboots a running VM.
+  rpc RebootVM(RebootVMRequest) returns (OperationResponse);
+  // GetVM returns the current status of a VM.
+  rpc GetVM(GetVMRequest) returns (VMResponse);
+  // GetNodeStatus returns node resource usage and health.
+  rpc GetNodeStatus(GetNodeStatusRequest) returns (NodeStatusResponse);
+  // Heartbeat is periodically called by the Control Plane to check liveness
+  // and to refresh node resource capacity.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // GetConsoleToken requests a short-lived token that authorizes access to a
+  // VM's VNC console.
+  rpc GetConsoleToken(GetConsoleTokenRequest) returns (GetConsoleTokenResponse);
+}
+
+// NetworkInterfaceConfig describes a single NIC to attach to a VM.
+message NetworkInterfaceConfig {
+  // Bridge name the NIC is attached to, e.g. "br-public".
+  string bridge = 1;
+  // MAC address of the NIC.
+  string mac_address = 2;
+  // Model of the NIC, e.g. "virtio".
+  string model = 3;
+}
+
+// DiskConfig describes a disk to attach to a VM.
+message DiskConfig {
+  // Name of the disk device (e.g. "vda").
+  string device = 1;
+  // Storage volume name in the node's storage pool.
+  string volume_name = 2;
+  // Size of the volume in bytes.
+  uint64 size_bytes = 3;
+  // Whether the disk is writable.
+  bool writable = 4;
+}
+
+message CreateVMRequest {
+  // Globally unique VM ID used to name the domain and volumes.
+  string vm_id = 1;
+  string vm_name = 2;
+  string instance_id = 3;
+  // Number of vCPUs.
+  uint32 vcpu = 4;
+  // Memory size in bytes.
+  uint64 memory_bytes = 5;
+  // Root disk size in bytes.
+  uint64 disk_size_bytes = 6;
+  // Image to clone as the root disk.
+  ImageRef image = 7;
+  repeated NetworkInterfaceConfig interfaces = 8;
+  // Cloud-init configuration.
+  CloudInitConfig cloud_init = 9;
+  // Storage pool name to use. Empty means the node default.
+  string storage_pool = 10;
+}
+
+message ImageRef {
+  string image_id = 1;
+  string name = 2;
+  // URL or local path the agent can fetch the image from.
+  string source_url = 3;
+  // Expected checksum (sha256).
+  string checksum = 4;
+  // Expected size in bytes.
+  uint64 size_bytes = 5;
+  // Image format, e.g. "qcow2".
+  string format = 6;
+  // Whether the image is cloud-init compatible.
+  bool cloud_init_compatible = 7;
+}
+
+message CloudInitConfig {
+  string instance_id = 1;
+  string hostname = 2;
+  repeated string ssh_authorized_keys = 3;
+  // Seed user's password (hashed or plaintext as configured).
+  string user = 4;
+  string password = 5;
+  repeated NetworkConfig networks = 6;
+  // Additional arbitrary cloud-init user-data.
+  string user_data = 7;
+}
+
+message NetworkConfig {
+  // Interface index this config applies to (0-based, matches interfaces order).
+  uint32 interface_index = 1;
+  // IPv4 configuration (static).
+  repeated string ipv4_addresses = 2;
+  string ipv4_gateway = 3;
+  // IPv6 configuration (static).
+  repeated string ipv6_addresses = 4;
+  string ipv6_gateway = 5;
+  repeated string dns_servers = 6;
+  // CIDR prefix for the network.
+  string cidr = 7;
+}
+
+message DeleteVMRequest {
+  string vm_id = 1;
+  string vm_name = 2;
+  // Whether to also delete the disk volumes.
+  bool delete_disk = 3;
+}
+
+message StartVMRequest {
+  string vm_id = 1;
+  string vm_name = 2;
+}
+
+message StopVMRequest {
+  string vm_id = 1;
+  string vm_name = 2;
+  // Graceful shutdown timeout in seconds before forcing.
+  uint32 timeout_seconds = 3;
+}
+
+message ForceStopVMRequest {
+  string vm_id = 1;
+  string vm_name = 2;
+}
+
+message RebootVMRequest {
+  string vm_id = 1;
+  string vm_name = 2;
+}
+
+message GetVMRequest {
+  string vm_id = 1;
+  string vm_name = 2;
+}
+
+message VMResponse {
+  common.v1.VMStatus status = 1;
+}
+
+message GetNodeStatusRequest {}
+
+message NodeStatusResponse {
+  common.v1.NodeStatus status = 1;
+}
+
+message HeartbeatRequest {
+  // Agent name, used to correlate with the node record.
+  string agent_id = 1;
+  string hostname = 2;
+  common.v1.NodeStatus status = 3;
+}
+
+message HeartbeatResponse {
+  bool ok = 1;
+}
+
+message GetConsoleTokenRequest {
+  string vm_id = 1;
+  string vm_name = 2;
+}
+
+message GetConsoleTokenResponse {
+  // VNC host to connect to (reachable from the console gateway).
+  string host = 1;
+  uint32 port = 2;
+  // One-time token that the VNC proxy validates before connecting.
+  string token = 3;
+}
+
+message OperationResponse {
+  common.v1.OperationState state = 1;
+  common.v1.Error error = 2;
+}

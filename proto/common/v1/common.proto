@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "github.com/tuna2134/vps/proto/gen/common/v1;commonv1";
+
+// OperationState represents the lifecycle state of a long-running operation.
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  OPERATION_STATE_PENDING = 1;
+  OPERATION_STATE_RUNNING = 2;
+  OPERATION_STATE_SUCCEEDED = 3;
+  OPERATION_STATE_FAILED = 4;
+}
+
+// VMState represents the runtime state of a virtual machine.
+enum VMState {
+  VM_STATE_UNSPECIFIED = 0;
+  VM_STATE_NOSTATE = 1;
+  VM_STATE_RUNNING = 2;
+  VM_STATE_BLOCKED = 3;
+  VM_STATE_PAUSED = 4;
+  VM_STATE_SHUTDOWN = 5;
+  VM_STATE_CRASHED = 6;
+  VM_STATE_PMSUSPENDED = 7;
+  VM_STATE_SHUTOFF = 8;
+}
+
+message Error {
+  string code = 1;
+  string message = 2;
+}
+
+// VMStatus holds a snapshot of VM resource information.
+message VMStatus {
+  string name = 1;
+  string uuid = 2;
+  VMState state = 3;
+  uint32 vcpu_count = 4;
+  uint64 memory_bytes = 5;
+  uint64 cpu_time_ns = 6;
+  repeated NetworkInterfaceInfo interfaces = 7;
+  repeated DiskInfo disks = 8;
+}
+
+message NetworkInterfaceInfo {
+  string name = 1;
+  string mac_address = 2;
+  repeated string ipv4_addresses = 3;
+  repeated string ipv6_addresses = 4;
+}
+
+message DiskInfo {
+  string name = 1;
+  uint64 capacity_bytes = 2;
+  uint64 allocated_bytes = 3;
+}
+
+// NodeStatus reports current node resource usage and health.
+message NodeStatus {
+  string hostname = 1;
+  uint32 cpu_count = 2;
+  uint64 memory_total_bytes = 3;
+  uint64 memory_free_bytes = 4;
+  uint64 storage_total_bytes = 5;
+  uint64 storage_free_bytes = 6;
+  float cpu_usage_percent = 7;
+  bool healthy = 8;
+}
