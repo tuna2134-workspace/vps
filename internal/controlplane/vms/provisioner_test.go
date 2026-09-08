@@ -95,6 +95,30 @@ func (s *memoryVMStore) GetByID(ctx context.Context, id string) (*models.VM, err
 	return vm, nil
 }
 
+func (s *memoryVMStore) Create(ctx context.Context, vm *models.VM) (*models.VM, error) {
+	s.store.vms[vm.ID] = vm
+	return vm, nil
+}
+
+func (s *memoryVMStore) ListByUser(ctx context.Context, userID string) ([]models.VM, error) {
+	var out []models.VM
+	for _, vm := range s.store.vms {
+		if vm.UserID == userID {
+			out = append(out, *vm)
+		}
+	}
+	return out, nil
+}
+
+func (s *memoryVMStore) Exists(ctx context.Context, mac string) (bool, error) {
+	for _, vm := range s.store.vms {
+		if vm.MACAddress == mac {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // memoryOpStore implements OperationStore.
 type memoryOpStore struct{ store *memoryStore }
 
@@ -103,6 +127,21 @@ func (s *memoryOpStore) GetByID(ctx context.Context, id string) (*models.VMOpera
 	if !ok {
 		return nil, errors.New("op not found")
 	}
+	return op, nil
+}
+
+func (s *memoryOpStore) GetByIdempotencyKey(ctx context.Context, key string) (*models.VMOperation, error) {
+	for _, op := range s.store.ops {
+		if op.IdempotencyKey == key {
+			return op, nil
+		}
+	}
+	return nil, errors.New("op not found")
+}
+
+func (s *memoryOpStore) Create(ctx context.Context, op *models.VMOperation) (*models.VMOperation, error) {
+	op.ID = "op-" + op.IdempotencyKey
+	s.store.ops[op.ID] = op
 	return op, nil
 }
 

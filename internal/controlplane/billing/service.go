@@ -12,7 +12,6 @@ import (
 
 	"github.com/stripe/stripe-go/v81"
 	"github.com/stripe/stripe-go/v81/client"
-	"github.com/stripe/stripe-go/v81/subscription"
 	"github.com/stripe/stripe-go/v81/webhook"
 
 	"github.com/tuna2134/vps/internal/controlplane/audit"
@@ -112,7 +111,7 @@ func (s *Service) CreateSubscription(ctx context.Context, userID, stripeCustomer
 			SaveDefaultPaymentMethod: stripe.String(string(stripe.SubscriptionPaymentSettingsSaveDefaultPaymentMethodOnSubscription)),
 		},
 	}
-	sub, err := subscription.New(params)
+	sub, err := s.client.Subscriptions.New(params)
 	if err != nil {
 		return nil, fmt.Errorf("create stripe subscription: %w", err)
 	}

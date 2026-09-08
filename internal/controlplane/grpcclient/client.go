@@ -164,20 +164,16 @@ func (c *Client) Heartbeat(ctx context.Context, req *agentv1.HeartbeatRequest, t
 
 // Console opens a bidirectional stream to a VM's console (serial or VNC). The
 // first frame carries the VM identity and console type. The returned stream is
-// the raw gRPC stream; callers typically wrap it to satisfy the
-// console.Stream interface.
-func (c *Client) Console(ctx context.Context, vmID, vmName, consoleType string, timeout time.Duration) (agentv1.AgentService_ConsoleClient, error) {
-	ctx, cancel := c.withTimeout(ctx, timeout)
+// bound to the caller's context (the console session is long-lived, so no
+// per-call timeout is applied here).
+func (c *Client) Console(ctx context.Context, vmID, vmName, consoleType string) (agentv1.AgentService_ConsoleClient, error) {
 	stream, err := c.service.Console(ctx)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 	if err := stream.Send(&agentv1.ConsoleRequest{VmId: vmID, VmName: vmName, ConsoleType: consoleType}); err != nil {
-		cancel()
 		return nil, err
 	}
-	// The caller is responsible for canceling the context.
 	return stream, nil
 }
 

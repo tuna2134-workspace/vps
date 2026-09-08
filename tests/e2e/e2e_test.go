@@ -186,7 +186,7 @@ func (a *e2eConsoleAgent) OpenConsole(ctx context.Context, endpoint, vmID, vmNam
 	if err != nil {
 		return nil, err
 	}
-	stream, err := client.Console(ctx, vmID, vmName, consoleType, 5*time.Second)
+	stream, err := client.Console(ctx, vmID, vmName, consoleType)
 	if err != nil {
 		return nil, err
 	}

@@ -356,13 +356,14 @@ type agentConsoleAdapter struct {
 
 // OpenConsole opens a bidirectional console stream through the agent's gRPC
 // Console RPC (virDomainOpenConsole for serial, virDomainOpenGraphicsFD for
-// VNC).
+// VNC). The stream is long-lived; it is cancelled when the caller's context
+// (the console session) ends.
 func (a *agentConsoleAdapter) OpenConsole(ctx context.Context, endpoint, vmID, vmName, consoleType string) (console.Stream, error) {
 	client, err := a.factory.Client(ctx, endpoint)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := client.Console(ctx, vmID, vmName, consoleType, 15*time.Second)
+	stream, err := client.Console(ctx, vmID, vmName, consoleType)
 	if err != nil {
 		return nil, err
 	}

@@ -62,10 +62,13 @@ func run(log *slog.Logger) error {
 	fetcher := image.New(filepath.Join(cfg.WorkDir, "images"))
 
 	var ipt network.Firewall
-	var err error
-	ipt, err = network.NewNftablesManager()
+	nft, err := network.NewNftablesManager()
 	if err != nil {
 		log.Warn("nftables unavailable (continuing without IP/MAC binding)", "error", err)
+	} else {
+		// Assign only on success: a typed nil *NftablesManager in an interface
+		// is non-nil and would panic on method calls.
+		ipt = nft
 	}
 
 	mgr := manager.New(lv, store, ipt, fetcher, cfg.WorkDir, cfg.StoragePool, log)

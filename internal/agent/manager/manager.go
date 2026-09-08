@@ -84,7 +84,9 @@ func (m *Manager) CreateVM(ctx context.Context, req *agentv1.CreateVMRequest) er
 	_ = m.storage.DeleteVolume(pool, cloudVol)
 
 	// Direct-kernel boot (minimal/rescue images): no root disk is uploaded;
-	// the domain boots kernel+initrd instead.
+	// the domain boots kernel+initrd instead. The kernel/initrd files are kept
+	// in the workdir as a local image cache: the domain XML references them, so
+	// deleting them after provisioning would break VM restarts.
 	kernelBoot := req.GetImage().GetKernelUrl() != ""
 	var kernelPath, initrdPath string
 	if kernelBoot {
@@ -93,14 +95,12 @@ func (m *Manager) CreateVM(ctx context.Context, req *agentv1.CreateVMRequest) er
 			return fmt.Errorf("fetch kernel: %w", err)
 		}
 		kernelPath = kres.Path
-		defer m.cleanupFile(kernelPath)
 		if req.GetImage().GetInitrdUrl() != "" {
 			ires, err := m.fetcher.Fetch(ctx, req.GetImage().GetInitrdUrl(), "", 0)
 			if err != nil {
 				return fmt.Errorf("fetch initrd: %w", err)
 			}
 			initrdPath = ires.Path
-			defer m.cleanupFile(initrdPath)
 		}
 	} else {
 		// 1. Fetch the base image.

@@ -33,6 +33,22 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// worldTempDir creates a single-level world-traversable temp directory under
+// /tmp. QEMU runs as a different user (e.g. `qemu`) under qemu:///system, so
+// the default 0700 t.TempDir() (and its 0700 parent) cannot be traversed.
+func worldTempDir(t *testing.T, prefix string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // TestRealLibvirt exercises the REAL libvirt Adapter against a live
 // hypervisor:
 //   - connects, creates a storage pool + volume, uploads and resizes it
@@ -65,7 +81,8 @@ func TestRealLibvirt(t *testing.T) {
 
 	// 2. Create a real dir storage pool (official libvirt-go-xml).
 	pool := fmt.Sprintf("vps-real-%d", time.Now().UnixNano()%100000)
-	poolDir := t.TempDir()
+	poolDir := worldTempDir(t, "vps-pool-")
+	_ = os.Chmod(poolDir, 0o777)
 	if err := createStoragePool(uri, pool, poolDir); err != nil {
 		t.Fatalf("create storage pool: %v", err)
 	}
@@ -229,6 +246,168 @@ func testVNCHandshake(t *testing.T, adapter *agentlibvirt.Adapter, name string) 
 	}
 }
 
+// TestRealVMShutdownReboot verifies VM shutdown and reboot lifecycle against a
+// REAL QEMU guest. The guest init powers itself off / reboots in response to
+// serial commands:
+//
+//	start -> running
+//	graceful shutdown (serial "poweroff") -> guest powers off -> shutoff
+//	start -> running
+//	reboot (serial "reboot")              -> guest reboots -> running again
+//	force stop (virDomainDestroy)         -> shutoff
+//
+// The libvirt virDomainShutdown / virDomainReboot calls are also asserted to
+// be accepted (for ACPI-capable guests, e.g. real cloud images, they directly
+// shut down / reboot the guest).
+func TestRealVMShutdownReboot(t *testing.T) {
+	if os.Getenv("REAL_LIBVIRT") != "1" {
+		t.Skip("set REAL_LIBVIRT=1 to run against a real hypervisor")
+	}
+	uri := os.Getenv("LIBVIRT_URI")
+	if uri == "" {
+		uri = "qemu:///system"
+	}
+	qemu := findQEMU(t)
+	if qemu == "" {
+		t.Skip("QEMU not installed on this host")
+	}
+	kernel := os.Getenv("KERNEL_PATH")
+	if kernel == "" {
+		kernel = "/boot/vmlinuz-linux"
+	}
+	if _, err := os.Stat(kernel); err != nil {
+		t.Skipf("kernel %s not available: %v", kernel, err)
+	}
+
+	adapter := agentlibvirt.NewAdapter(uri)
+	if err := adapter.Connect(); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer adapter.Close()
+
+	initramfs := buildInitramfs(t)
+	name := fmt.Sprintf("vps-lc-%d", time.Now().UnixNano()%100000)
+	xml, err := agentlibvirt.GenerateDomainXML(agentlibvirt.DomainConfig{
+		Name:        name,
+		MemoryBytes: 512 * 1024 * 1024,
+		VCPU:        1,
+		Kernel:      kernel,
+		Initrd:      initramfs,
+		Cmdline:     "console=ttyS0,115200n8",
+		VNCPassword: "test",
+		Emulator:    qemu,
+	})
+	if err != nil {
+		t.Fatalf("generate domain xml: %v", err)
+	}
+	if err := adapter.DefineDomain(xml); err != nil {
+		t.Fatalf("define domain: %v", err)
+	}
+	defer func() {
+		_ = adapter.DestroyDomain(name)
+		_ = adapter.UndefineDomain(name)
+	}()
+
+	if err := adapter.StartDomain(name); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitForDomainState(t, adapter, name, agentlibvirt.StateRunning)
+	t.Log("vm running")
+
+	// 1. Graceful shutdown: the guest init powers itself off in response to
+	//    the serial "poweroff" command; the domain must reach shutoff.
+	cs, err := adapter.OpenConsole(name)
+	if err != nil {
+		t.Fatalf("open console: %v", err)
+	}
+	// Read the boot banner first so the console stream is stable and no input
+	// bytes are lost during boot output flush.
+	if _, err := readConsoleUntil(cs, "console ready", 30*time.Second); err != nil {
+		_ = cs.Close()
+		t.Fatalf("read boot banner: %v", err)
+	}
+	if _, err := cs.Send([]byte("poweroff\n")); err != nil {
+		_ = cs.Close()
+		t.Fatalf("send poweroff: %v", err)
+	}
+	startShutdown := time.Now()
+	waitForDomainState(t, adapter, name, agentlibvirt.StateShutoff)
+	_ = cs.Close()
+	t.Logf("graceful shutdown verified -> shutoff (took %s)", time.Since(startShutdown))
+
+	// 2. Start again.
+	if err := adapter.StartDomain(name); err != nil {
+		t.Fatalf("start after shutdown: %v", err)
+	}
+	waitForDomainState(t, adapter, name, agentlibvirt.StateRunning)
+	t.Log("restarted after shutdown")
+
+	// 3. Reboot: the guest reboots on the serial "reboot" command; the serial
+	//    console comes back with the boot banner.
+	rcs, err := adapter.OpenConsole(name)
+	if err != nil {
+		t.Fatalf("open console for reboot: %v", err)
+	}
+	if _, err := readConsoleUntil(rcs, "console ready", 30*time.Second); err != nil {
+		_ = rcs.Close()
+		t.Fatalf("read banner before reboot: %v", err)
+	}
+	if _, err := rcs.Send([]byte("reboot\n")); err != nil {
+		_ = rcs.Close()
+		t.Fatalf("send reboot: %v", err)
+	}
+	_ = rcs.Close()
+	if err := waitForRebootBanner(adapter, name, 90*time.Second); err != nil {
+		t.Fatalf("reboot verification: %v", err)
+	}
+	waitForDomainState(t, adapter, name, agentlibvirt.StateRunning)
+	t.Log("reboot verified (guest rebooted and serial console is back)")
+
+	// The libvirt virDomainShutdown / virDomainReboot APIs are accepted
+	// (they are what the agent's stop/reboot operations call); for
+	// ACPI-capable guests (real cloud images) they power off / reboot the
+	// guest directly.
+	if err := adapter.ShutdownDomain(name); err != nil {
+		t.Fatalf("shutdown (libvirt): %v", err)
+	}
+	if err := adapter.RebootDomain(name); err != nil {
+		t.Fatalf("reboot (libvirt): %v", err)
+	}
+	t.Log("libvirt shutdown/reboot API accepted")
+
+	// 4. Force stop.
+	if err := adapter.DestroyDomain(name); err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+	waitForDomainState(t, adapter, name, agentlibvirt.StateShutoff)
+	t.Log("force stop verified (destroy) -> shutoff")
+}
+
+// waitForRebootBanner waits for the domain to return to running and the guest
+// serial banner to appear again (indicating a completed reboot).
+func waitForRebootBanner(adapter *agentlibvirt.Adapter, name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		state, _ := adapter.GetDomainState(name)
+		if state != agentlibvirt.StateRunning {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		cs, err := adapter.OpenConsole(name)
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		banner, err := readConsoleUntil(cs, "console ready", 15*time.Second)
+		_ = cs.Close()
+		if err == nil && bytes.Contains([]byte(banner), []byte("VPS real-libvirt console ready")) {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("guest did not reboot within %s", timeout)
+}
+
 // findQEMU locates a usable QEMU binary.
 func findQEMU(t *testing.T) string {
 	t.Helper()
@@ -331,10 +510,7 @@ func ensureReadable(t *testing.T, path string) string {
 	if info.Mode().Perm()&0o004 != 0 && info.Mode().Perm()&0o001 != 0 {
 		return path
 	}
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o755); err != nil {
-		t.Fatalf("chmod temp dir: %v", err)
-	}
+	dir := worldTempDir(t, "vps-kernel-")
 	dst := filepath.Join(dir, filepath.Base(path))
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -352,11 +528,7 @@ func ensureReadable(t *testing.T, path string) string {
 // user (e.g. `qemu`) under qemu:///system.
 func buildInitramfs(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	// t.TempDir() is 0700; relax it so the QEMU user can traverse and read.
-	if err := os.Chmod(dir, 0o755); err != nil {
-		t.Fatalf("chmod temp dir: %v", err)
-	}
+	dir := worldTempDir(t, "vps-initramfs-")
 	root := filepath.Join(dir, "root")
 	for _, d := range []string{"proc", "sys", "dev", "bin"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {

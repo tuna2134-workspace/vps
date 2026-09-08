@@ -37,19 +37,25 @@ type ProvisioningCatalog interface {
 
 var _ ProvisioningCatalog = (*Catalog)(nil)
 
-// VMStore is the subset of the VM repository the provisioner needs.
+// VMStore is the subset of the VM repository the provisioner and the VM
+// service need.
 type VMStore interface {
+	GetByID(ctx context.Context, id string) (*models.VM, error)
+	Create(ctx context.Context, vm *models.VM) (*models.VM, error)
+	ListByUser(ctx context.Context, userID string) ([]models.VM, error)
 	UpdateStatus(ctx context.Context, id string, status models.VMStatus) error
 	SoftDelete(ctx context.Context, id string) error
-	GetByID(ctx context.Context, id string) (*models.VM, error)
+	Exists(ctx context.Context, mac string) (bool, error)
 }
 
 var _ VMStore = (*repositories.VMRepository)(nil)
 
 // OperationStore is the subset of the operation repository the provisioner
-// needs.
+// and the VM service need.
 type OperationStore interface {
 	GetByID(ctx context.Context, id string) (*models.VMOperation, error)
+	GetByIdempotencyKey(ctx context.Context, key string) (*models.VMOperation, error)
+	Create(ctx context.Context, op *models.VMOperation) (*models.VMOperation, error)
 	MarkRunning(ctx context.Context, id string) error
 	MarkSucceeded(ctx context.Context, id string) error
 	MarkFailed(ctx context.Context, id, errMsg string) error

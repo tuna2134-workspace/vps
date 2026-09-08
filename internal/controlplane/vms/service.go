@@ -34,8 +34,8 @@ var (
 type BillingGate func(ctx context.Context, userID string) (bool, error)
 
 type Service struct {
-	vms         *repositories.VMRepository
-	ops         *repositories.OperationRepository
+	vms         VMStore
+	ops         OperationStore
 	nodes       *repositories.NodeRepository
 	plans       *repositories.PlanRepository
 	networks    *networks.Service
@@ -47,8 +47,8 @@ type Service struct {
 }
 
 func NewService(
-	vms *repositories.VMRepository,
-	ops *repositories.OperationRepository,
+	vms VMStore,
+	ops OperationStore,
 	nodes *repositories.NodeRepository,
 	plans *repositories.PlanRepository,
 	networkSvc *networks.Service,
@@ -107,14 +107,10 @@ func (s *Service) CreateVM(ctx context.Context, userID string, req CreateRequest
 	}
 
 	// Billing status check.
-	if s.billingGate != nil {
-		ok, err := s.billingGate(ctx, userID)
-		if err != nil {
-			return nil, nil, err
-		}
-		if !ok {
-			return nil, nil, ErrBillingRequired
-		}
+	if ok, err := s.billingAllowed(ctx, userID); err != nil {
+		return nil, nil, err
+	} else if !ok {
+		return nil, nil, ErrBillingRequired
 	}
 
 	// Resolve resources from the plan when not provided explicitly.
@@ -240,6 +236,17 @@ func (s *Service) NewOperation(ctx context.Context, userID, vmID string, opType 
 		return nil, ErrNotFound
 	}
 
+	// Operations that enable compute (start, reboot) require an active
+	// subscription. Otherwise a suspended/unpaid user could restart a VM that
+	// was shut down for non-payment, bypassing the suspension.
+	if opType == models.OperationStart || opType == models.OperationReboot {
+		if ok, err := s.billingAllowed(ctx, userID); err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, ErrBillingRequired
+		}
+	}
+
 	if err := s.validateTransition(vm, opType); err != nil {
 		return nil, err
 	}
@@ -264,6 +271,15 @@ func (s *Service) NewOperation(ctx context.Context, userID, vmID string, opType 
 	})
 	s.provisioner.Enqueue(ProvisionJob{OperationID: op.ID, VMID: vm.ID, NodeID: vm.NodeID})
 	return op, nil
+}
+
+// billingAllowed reports whether the user's billing is active. It fails
+// closed: if no billing gate is configured, VM compute is denied.
+func (s *Service) billingAllowed(ctx context.Context, userID string) (bool, error) {
+	if s.billingGate == nil {
+		return false, nil
+	}
+	return s.billingGate(ctx, userID)
 }
 
 func (s *Service) validateTransition(vm *models.VM, opType models.OperationType) error {
