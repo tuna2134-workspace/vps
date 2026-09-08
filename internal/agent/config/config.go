@@ -30,9 +30,6 @@ type Config struct {
 
 	// Heartbeat interval used when the control plane drives heartbeats.
 	HeartbeatInterval time.Duration
-
-	// Whether this is a test/development agent with libvirt disabled.
-	FakeMode bool
 }
 
 func getenv(key, def string) string {
@@ -76,6 +73,5 @@ func Load() *Config {
 		KeyFile:           getenv("AGENT_TLS_KEY_FILE", ""),
 		CAFile:            getenv("AGENT_TLS_CA_FILE", ""),
 		HeartbeatInterval: getenvDuration("AGENT_HEARTBEAT_INTERVAL", 15*time.Second),
-		FakeMode:          getenvBool("AGENT_FAKE_MODE", false),
 	}
 }

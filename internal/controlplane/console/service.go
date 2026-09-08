@@ -28,24 +28,34 @@ const (
 	TypeSerial = "serial"
 )
 
-// Endpoint describes how to reach a VM's console. Exactly one of
-// (Host, Port) or Path is set depending on the console type.
-type Endpoint struct {
-	ConsoleType string
-	Host        string
-	Port        int
-	// PTY path used for serial consoles.
-	Path string
+// Stream is a bidirectional byte stream to a VM's console (serial or VNC),
+// backed by the agent's gRPC Console RPC (virDomainOpenConsole /
+// virDomainOpenGraphicsFD).
+type Stream interface {
+	Send([]byte) error
+	Recv() ([]byte, error)
+	Close() error
 }
 
-// AgentClient is the agent API used to fetch console addressing.
+// AgentClient is the agent API used to open console streams.
 type AgentClient interface {
-	GetConsoleToken(ctx context.Context, endpoint, vmID, vmName, consoleType string) (*Endpoint, error)
+	// OpenConsole opens a bidirectional stream to a VM's console. consoleType
+	// is "vnc" or "serial".
+	OpenConsole(ctx context.Context, endpoint, vmID, vmName, consoleType string) (Stream, error)
 }
+
+// tokenStore persists console tokens. The repository implementation satisfies
+// this interface; tests can inject an in-memory store.
+type tokenStore interface {
+	Create(ctx context.Context, t *models.ConsoleToken) (*models.ConsoleToken, error)
+	Consume(ctx context.Context, tokenHash string) (*models.ConsoleToken, error)
+}
+
+var _ tokenStore = (*repositories.ConsoleTokenRepository)(nil)
 
 // Service issues and consumes console tokens.
 type Service struct {
-	tokens  *repositories.ConsoleTokenRepository
+	tokens  tokenStore
 	agents  AgentClient
 	ttl     time.Duration
 	audit   *audit.Service
@@ -53,7 +63,7 @@ type Service struct {
 }
 
 func NewService(
-	tokens *repositories.ConsoleTokenRepository,
+	tokens tokenStore,
 	agents AgentClient,
 	ttl time.Duration,
 	auditSvc *audit.Service,
@@ -84,24 +94,22 @@ func (s *Service) Issue(ctx context.Context, userID, vmID, vmName, nodeEndpoint,
 	if consoleType != TypeVNC && consoleType != TypeSerial {
 		return nil, "", fmt.Errorf("unsupported console type: %s", consoleType)
 	}
-	ep, err := s.agents.GetConsoleToken(ctx, nodeEndpoint, vmID, vmName, consoleType)
-	if err != nil {
-		return nil, "", fmt.Errorf("request console endpoint: %w", err)
-	}
 
+	// The console stream is opened by the gateway on demand (serial via
+	// virDomainOpenConsole, VNC via virDomainOpenGraphicsFD); the token only
+	// records how to reach the agent.
 	token, err := generateToken(32)
 	if err != nil {
 		return nil, "", err
 	}
 	tok, err := s.tokens.Create(ctx, &models.ConsoleToken{
-		VMID:        vmID,
-		UserID:      userID,
-		TokenHash:   session.TokenFromString(token).Hash(),
-		ConsoleType: consoleType,
-		Host:        ep.Host,
-		Port:        ep.Port,
-		Path:        ep.Path,
-		ExpiresAt:   time.Now().Add(s.ttl),
+		VMID:         vmID,
+		UserID:       userID,
+		TokenHash:    session.TokenFromString(token).Hash(),
+		ConsoleType:  consoleType,
+		NodeEndpoint: nodeEndpoint,
+		VMName:       vmName,
+		ExpiresAt:    time.Now().Add(s.ttl),
 	})
 	if err != nil {
 		return nil, "", err
@@ -134,6 +142,12 @@ func (s *Service) WebsocketURL(baseURL, token string) string {
 // BaseURL returns the configured public base URL.
 func (s *Service) BaseURL() string {
 	return s.baseURL
+}
+
+// Agent returns the configured agent client (used by the gateway to open
+// serial console streams).
+func (s *Service) Agent() AgentClient {
+	return s.agents
 }
 
 func generateToken(n int) (string, error) {

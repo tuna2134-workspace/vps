@@ -1,8 +1,8 @@
 // Package gateway implements the console WebSocket gateway. A noVNC/serial
 // client connects to /console/ws?token=...; the gateway validates the one-time
-// token and bridges the WebSocket to the VM's console endpoint. VNC endpoints
-// are TCP, serial consoles are Unix domain sockets. Neither is ever exposed
-// directly to clients.
+// token and bridges the WebSocket to the agent's streaming Console RPC (serial
+// via virDomainOpenConsole, VNC via virDomainOpenGraphicsFD). Neither the VNC
+// port nor the serial PTY is ever exposed on the network.
 package gateway
 
 import (
@@ -10,9 +10,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
@@ -21,15 +19,14 @@ import (
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
-// Gateway bridges authenticated WebSockets to console endpoints.
+// Gateway bridges authenticated WebSockets to VM consoles.
 type Gateway struct {
-	cons    *console.Service
-	log     *slog.Logger
-	timeout time.Duration
+	cons *console.Service
+	log  *slog.Logger
 }
 
 func New(cons *console.Service, log *slog.Logger) *Gateway {
-	return &Gateway{cons: cons, log: log, timeout: 10 * time.Second}
+	return &Gateway{cons: cons, log: log}
 }
 
 // HandleWS is the HTTP handler for /console/ws. The one-time token is passed
@@ -68,18 +65,23 @@ func (g *Gateway) HandleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) proxy(ctx context.Context, ws *websocket.Conn, tok *models.ConsoleToken) error {
-	conn, err := g.dial(ctx, tok)
+	agent := g.cons.Agent()
+	if agent == nil {
+		return errors.New("console agent backend not configured")
+	}
+
+	stream, err := agent.OpenConsole(ctx, tok.NodeEndpoint, tok.VMID, tok.VMName, tok.ConsoleType)
 	if err != nil {
-		g.log.Warn("console dial failed", "vm", tok.VMID, "type", tok.ConsoleType, "error", err)
+		g.log.Warn("open console stream failed", "vm", tok.VMID, "type", tok.ConsoleType, "error", err)
 		return err
 	}
-	defer conn.Close()
+	defer stream.Close()
 
 	g.log.Info("console session established", "vm", tok.VMID, "type", tok.ConsoleType)
 
 	errCh := make(chan error, 2)
 
-	// WebSocket -> console
+	// WebSocket -> agent console
 	go func() {
 		for {
 			typ, data, err := ws.Read(ctx)
@@ -90,23 +92,22 @@ func (g *Gateway) proxy(ctx context.Context, ws *websocket.Conn, tok *models.Con
 			if typ != websocket.MessageBinary && typ != websocket.MessageText {
 				continue
 			}
-			if _, err := conn.Write(data); err != nil {
+			if err := stream.Send(data); err != nil {
 				errCh <- err
 				return
 			}
 		}
 	}()
 
-	// Console -> WebSocket
+	// Agent console -> WebSocket
 	go func() {
-		buf := make([]byte, 32*1024)
 		for {
-			n, err := conn.Read(buf)
+			data, err := stream.Recv()
 			if err != nil {
 				errCh <- err
 				return
 			}
-			if err := ws.Write(ctx, websocket.MessageBinary, buf[:n]); err != nil {
+			if err := ws.Write(ctx, websocket.MessageBinary, data); err != nil {
 				errCh <- err
 				return
 			}
@@ -117,31 +118,9 @@ func (g *Gateway) proxy(ctx context.Context, ws *websocket.Conn, tok *models.Con
 	case <-ctx.Done():
 		return ctx.Err()
 	case err := <-errCh:
-		if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) {
+		if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 			return nil
 		}
 		return err
-	}
-}
-
-// dial connects to the console endpoint: TCP for VNC, Unix socket for serial.
-func (g *Gateway) dial(ctx context.Context, tok *models.ConsoleToken) (net.Conn, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, g.timeout)
-	defer cancel()
-
-	switch tok.ConsoleType {
-	case console.TypeSerial:
-		if tok.Path == "" {
-			return nil, errors.New("serial console has no pty path")
-		}
-		d := net.Dialer{}
-		return d.DialContext(timeoutCtx, "unix", tok.Path)
-	default:
-		if tok.Host == "" || tok.Port == 0 {
-			return nil, errors.New("vnc console has no host/port")
-		}
-		addr := net.JoinHostPort(tok.Host, strconv.Itoa(tok.Port))
-		d := net.Dialer{}
-		return d.DialContext(timeoutCtx, "tcp", addr)
 	}
 }

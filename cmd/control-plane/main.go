@@ -288,23 +288,39 @@ type agentConsoleAdapter struct {
 	factory *agents.Factory
 }
 
-func (a *agentConsoleAdapter) GetConsoleToken(ctx context.Context, endpoint, vmID, vmName, consoleType string) (*console.Endpoint, error) {
+// OpenConsole opens a bidirectional console stream through the agent's gRPC
+// Console RPC (virDomainOpenConsole for serial, virDomainOpenGraphicsFD for
+// VNC).
+func (a *agentConsoleAdapter) OpenConsole(ctx context.Context, endpoint, vmID, vmName, consoleType string) (console.Stream, error) {
 	client, err := a.factory.Client(ctx, endpoint)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.GetConsoleToken(ctx, &agentv1.GetConsoleTokenRequest{
-		VmId:        vmID,
-		VmName:      vmName,
-		ConsoleType: consoleType,
-	}, 15*time.Second)
+	stream, err := client.Console(ctx, vmID, vmName, consoleType, 15*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	return &console.Endpoint{
-		ConsoleType: consoleType,
-		Host:        resp.GetHost(),
-		Port:        int(resp.GetPort()),
-		Path:        resp.GetSerialPath(),
-	}, nil
+	return &grpcConsoleStream{stream: stream}, nil
+}
+
+// grpcConsoleStream adapts the raw gRPC bidi stream to the console.Stream
+// interface.
+type grpcConsoleStream struct {
+	stream agentv1.AgentService_ConsoleClient
+}
+
+func (g *grpcConsoleStream) Send(data []byte) error {
+	return g.stream.Send(&agentv1.ConsoleRequest{Data: data})
+}
+
+func (g *grpcConsoleStream) Recv() ([]byte, error) {
+	resp, err := g.stream.Recv()
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetData(), nil
+}
+
+func (g *grpcConsoleStream) Close() error {
+	return g.stream.CloseSend()
 }

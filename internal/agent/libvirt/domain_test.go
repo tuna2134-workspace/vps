@@ -1,7 +1,6 @@
 package libvirt
 
 import (
-	"strings"
 	"testing"
 
 	libvirtxml "libvirt.org/go/libvirtxml"
@@ -88,6 +87,9 @@ func TestGenerateDomainXML(t *testing.T) {
 }
 
 func TestParseVNCInfo(t *testing.T) {
+	// VNC endpoints are no longer parsed from XML; access goes through
+	// virDomainOpenGraphicsFD. This test asserts the generated domain still
+	// defines a loopback VNC device.
 	xml, err := GenerateDomainXML(DomainConfig{
 		Name: "vps-parse", MemoryBytes: 1 << 30, VCPU: 1,
 		Disks:      []DomainDisk{{Device: "disk", Type: "file", Source: "/tmp/x.qcow2", Driver: "qcow2", TargetDev: "vda", Writable: true}},
@@ -96,48 +98,16 @@ func TestParseVNCInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateDomainXML: %v", err)
 	}
-	host, port, err := parseVNCInfo(xml)
-	if err != nil {
-		t.Fatalf("parseVNCInfo: %v", err)
+	var d libvirtxml.Domain
+	if err := d.Unmarshal(xml); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
-	if host == "" {
-		t.Error("vnc host empty")
+	if len(d.Devices.Graphics) != 1 || d.Devices.Graphics[0].VNC == nil {
+		t.Fatalf("expected one vnc graphics device: %s", xml)
 	}
-	if port == 0 {
-		t.Error("vnc port should be non-zero after libvirt assigns it")
-	}
-}
-
-func TestParseSerialInfo(t *testing.T) {
-	// A running domain exposes the PTY path in its live XML. Simulate that.
-	xml := `<domain type='kvm'>
-  <name>vps-serial</name>
-  <devices>
-    <serial type='pty'>
-      <source path='/dev/pts/7'/>
-      <target type='isa-serial' port='0'>
-        <model name='isa-serial'/>
-      </target>
-    </serial>
-    <console type='pty'>
-      <source path='/dev/pts/7'/>
-      <target type='serial' port='0'/>
-    </console>
-  </devices>
-</domain>`
-	pty, err := parseSerialInfo(xml)
-	if err != nil {
-		t.Fatalf("parseSerialInfo: %v", err)
-	}
-	if pty != "/dev/pts/7" {
-		t.Errorf("expected /dev/pts/7, got %q", pty)
-	}
-}
-
-func TestParseSerialInfoMissing(t *testing.T) {
-	xml := `<domain type='kvm'><name>x</name><devices/></domain>`
-	if _, err := parseSerialInfo(xml); err == nil {
-		t.Error("expected error when no serial pty exists")
+	vnc := d.Devices.Graphics[0].VNC
+	if vnc.Listen != "127.0.0.1" {
+		t.Errorf("vnc must listen on loopback, got %q", vnc.Listen)
 	}
 }
 
@@ -162,9 +132,24 @@ func TestDomainHasSerialConsole(t *testing.T) {
 	}
 }
 
-func TestGenerateDomainXMLRequiresInterface(t *testing.T) {
-	_, err := GenerateDomainXML(DomainConfig{Name: "x", MemoryBytes: 1 << 30, VCPU: 1})
-	if err == nil || !strings.Contains(err.Error(), "interface") {
-		t.Errorf("expected interface requirement error, got %v", err)
+func TestGenerateDomainXMLKernelBootWithoutInterfaces(t *testing.T) {
+	// Kernel/initrd boot domains are valid without any NIC (used by the real
+	// libvirt test to boot a minimal serial console VM).
+	xml, err := GenerateDomainXML(DomainConfig{
+		Name: "vps-kernel", MemoryBytes: 1 << 30, VCPU: 1,
+		Kernel: "/boot/vmlinuz", Initrd: "/tmp/initramfs.cpio.gz", Cmdline: "console=ttyS0",
+	})
+	if err != nil {
+		t.Fatalf("GenerateDomainXML: %v", err)
+	}
+	var d libvirtxml.Domain
+	if err := d.Unmarshal(xml); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if d.OS == nil || d.OS.Kernel != "/boot/vmlinuz" || d.OS.Initrd != "/tmp/initramfs.cpio.gz" {
+		t.Errorf("kernel boot config wrong: %+v", d.OS)
+	}
+	if d.OS.Cmdline != "console=ttyS0" {
+		t.Errorf("cmdline wrong: %q", d.OS.Cmdline)
 	}
 }

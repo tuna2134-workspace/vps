@@ -30,9 +30,27 @@ service AgentService {
   // Heartbeat is periodically called by the Control Plane to check liveness
   // and to refresh node resource capacity.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-  // GetConsoleToken requests a short-lived token that authorizes access to a
-  // VM's VNC console.
-  rpc GetConsoleToken(GetConsoleTokenRequest) returns (GetConsoleTokenResponse);
+  // Console opens a bidirectional stream to a VM's console (serial or VNC)
+  // using the official virDomainOpenConsole / virDomainOpenGraphicsFD APIs.
+  // The first ConsoleRequest must carry vm_id/vm_name and console_type;
+  // subsequent messages are console input bytes.
+  rpc Console(stream ConsoleRequest) returns (stream ConsoleResponse);
+}
+
+// ConsoleRequest is one frame of a bidirectional console stream. The first
+// frame identifies the VM and console type; later frames carry input bytes.
+message ConsoleRequest {
+  string vm_id = 1;
+  string vm_name = 2;
+  // Console type: "vnc" or "serial". Required in the initial frame.
+  string console_type = 3;
+  // Console input bytes from the client (empty in the initial frame).
+  bytes data = 4;
+}
+
+// ConsoleResponse is one frame of console output from the VM.
+message ConsoleResponse {
+  bytes data = 1;
 }
 
 // NetworkInterfaceConfig describes a single NIC to attach to a VM.
@@ -90,6 +108,11 @@ message ImageRef {
   string format = 6;
   // Whether the image is cloud-init compatible.
   bool cloud_init_compatible = 7;
+  // Optional direct-kernel boot (used for minimal/rescue images). When set,
+  // the domain boots these files instead of from the root disk.
+  string kernel_url = 8;
+  string initrd_url = 9;
+  string cmdline = 10;
 }
 
 message CloudInitConfig {
@@ -171,23 +194,6 @@ message HeartbeatRequest {
 
 message HeartbeatResponse {
   bool ok = 1;
-}
-
-message GetConsoleTokenRequest {
-  string vm_id = 1;
-  string vm_name = 2;
-  // Console type: "vnc" or "serial".
-  string console_type = 3;
-}
-
-message GetConsoleTokenResponse {
-  // VNC host to connect to (reachable from the console gateway).
-  string host = 1;
-  uint32 port = 2;
-  // One-time token that the VNC proxy validates before connecting.
-  string token = 3;
-  // PTY path for serial consoles (e.g. "/dev/pts/3").
-  string serial_path = 4;
 }
 
 message OperationResponse {

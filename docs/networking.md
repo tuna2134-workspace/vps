@@ -44,28 +44,30 @@ MACs are locally-administered (unicast bit set via the LAA bit 0x02, multicast
 bit cleared). Random draws are checked against the DB and the `UNIQUE(mac_address)`
 constraint backs the guarantee. See `internal/controlplane/macalloc`.
 
-## iptables IP/MAC binding
+## nftables IP/MAC binding
 
-Each VM gets a per-VM chain plus one shared platform chain, so large fleets do
-not explode the FORWARD chain:
+Each VM gets a per-VM chain plus a shared platform chain, so large fleets do
+not explode the rule set. The implementation uses `github.com/google/nftables`
+(the iptables successor, programmed via netlink):
 
 ```text
-FORWARD          -j VPS_PLATFORM              (created once)
-VPS_PLATFORM     -j VPS_VM_<id>               (one jump per VM)
-VPS_VM_<id>:
-  -s ! <ip> -m mac --mac-source <mac> -j DROP   (VM MAC with foreign source IP)
-  -s <ip>  -m mac ! --mac-source <mac> -j DROP  (VM IP from a foreign MAC)
+table vps  (family ip)     base chain vps_platform  hook forward prio 0 policy accept
+table vps6 (family ip6)    base chain vps_platform  hook forward prio 0 policy accept
+vps_platform:  jump vps_vm_<id>                      (one jump per VM)
+vps_vm_<id>:
+  ether saddr <mac> ip saddr != <ip>   drop           (VM MAC with a foreign source IP)
+  ip saddr <ip> ether saddr != <mac>   drop           (VM IP from a foreign MAC)
 ```
 
-Rules are applied to both IPv4 and IPv6 tables. All mutations are idempotent:
-`Exists` is checked before `Append`, so re-provisioning a VM never duplicates
-rules. Deleting a VM flushes and removes its chain and the platform jump.
-Rule generation is a pure function (`vmBindingRules`) so it is unit-testable
-without kernel access.
+IPv4 and IPv6 rules live in separate `ip`/`ip6` family tables so the payload
+expressions stay unambiguous. All mutations are idempotent: re-provisioning a
+VM first removes any existing chain/jump and then recreates it, so rules are
+never duplicated. Deleting a VM removes its jump rule and flushes/deletes its
+chain. Rule construction is a pure function (`vmBindingRule`) so it is
+unit-testable without touching the kernel.
 
-The implementation uses `github.com/coreos/go-iptables`. The former
-`github.com/google/iptables` module was removed upstream; `coreos/go-iptables`
-is the maintained continuation of the same project.
+The former `github.com/google/iptables` was archived upstream; nftables is the
+successor and is what this project uses.
 
 ## DNS
 

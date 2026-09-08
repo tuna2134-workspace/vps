@@ -19,16 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_CreateVM_FullMethodName        = "/agent.v1.AgentService/CreateVM"
-	AgentService_DeleteVM_FullMethodName        = "/agent.v1.AgentService/DeleteVM"
-	AgentService_StartVM_FullMethodName         = "/agent.v1.AgentService/StartVM"
-	AgentService_StopVM_FullMethodName          = "/agent.v1.AgentService/StopVM"
-	AgentService_ForceStopVM_FullMethodName     = "/agent.v1.AgentService/ForceStopVM"
-	AgentService_RebootVM_FullMethodName        = "/agent.v1.AgentService/RebootVM"
-	AgentService_GetVM_FullMethodName           = "/agent.v1.AgentService/GetVM"
-	AgentService_GetNodeStatus_FullMethodName   = "/agent.v1.AgentService/GetNodeStatus"
-	AgentService_Heartbeat_FullMethodName       = "/agent.v1.AgentService/Heartbeat"
-	AgentService_GetConsoleToken_FullMethodName = "/agent.v1.AgentService/GetConsoleToken"
+	AgentService_CreateVM_FullMethodName      = "/agent.v1.AgentService/CreateVM"
+	AgentService_DeleteVM_FullMethodName      = "/agent.v1.AgentService/DeleteVM"
+	AgentService_StartVM_FullMethodName       = "/agent.v1.AgentService/StartVM"
+	AgentService_StopVM_FullMethodName        = "/agent.v1.AgentService/StopVM"
+	AgentService_ForceStopVM_FullMethodName   = "/agent.v1.AgentService/ForceStopVM"
+	AgentService_RebootVM_FullMethodName      = "/agent.v1.AgentService/RebootVM"
+	AgentService_GetVM_FullMethodName         = "/agent.v1.AgentService/GetVM"
+	AgentService_GetNodeStatus_FullMethodName = "/agent.v1.AgentService/GetNodeStatus"
+	AgentService_Heartbeat_FullMethodName     = "/agent.v1.AgentService/Heartbeat"
+	AgentService_Console_FullMethodName       = "/agent.v1.AgentService/Console"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -59,9 +59,11 @@ type AgentServiceClient interface {
 	// Heartbeat is periodically called by the Control Plane to check liveness
 	// and to refresh node resource capacity.
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
-	// GetConsoleToken requests a short-lived token that authorizes access to a
-	// VM's VNC console.
-	GetConsoleToken(ctx context.Context, in *GetConsoleTokenRequest, opts ...grpc.CallOption) (*GetConsoleTokenResponse, error)
+	// Console opens a bidirectional stream to a VM's console (serial or VNC)
+	// using the official virDomainOpenConsole / virDomainOpenGraphicsFD APIs.
+	// The first ConsoleRequest must carry vm_id/vm_name and console_type;
+	// subsequent messages are console input bytes.
+	Console(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConsoleRequest, ConsoleResponse], error)
 }
 
 type agentServiceClient struct {
@@ -162,15 +164,18 @@ func (c *agentServiceClient) Heartbeat(ctx context.Context, in *HeartbeatRequest
 	return out, nil
 }
 
-func (c *agentServiceClient) GetConsoleToken(ctx context.Context, in *GetConsoleTokenRequest, opts ...grpc.CallOption) (*GetConsoleTokenResponse, error) {
+func (c *agentServiceClient) Console(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConsoleRequest, ConsoleResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetConsoleTokenResponse)
-	err := c.cc.Invoke(ctx, AgentService_GetConsoleToken_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[0], AgentService_Console_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[ConsoleRequest, ConsoleResponse]{ClientStream: stream}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_ConsoleClient = grpc.BidiStreamingClient[ConsoleRequest, ConsoleResponse]
 
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
@@ -200,9 +205,11 @@ type AgentServiceServer interface {
 	// Heartbeat is periodically called by the Control Plane to check liveness
 	// and to refresh node resource capacity.
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
-	// GetConsoleToken requests a short-lived token that authorizes access to a
-	// VM's VNC console.
-	GetConsoleToken(context.Context, *GetConsoleTokenRequest) (*GetConsoleTokenResponse, error)
+	// Console opens a bidirectional stream to a VM's console (serial or VNC)
+	// using the official virDomainOpenConsole / virDomainOpenGraphicsFD APIs.
+	// The first ConsoleRequest must carry vm_id/vm_name and console_type;
+	// subsequent messages are console input bytes.
+	Console(grpc.BidiStreamingServer[ConsoleRequest, ConsoleResponse]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -240,8 +247,8 @@ func (UnimplementedAgentServiceServer) GetNodeStatus(context.Context, *GetNodeSt
 func (UnimplementedAgentServiceServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Heartbeat not implemented")
 }
-func (UnimplementedAgentServiceServer) GetConsoleToken(context.Context, *GetConsoleTokenRequest) (*GetConsoleTokenResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetConsoleToken not implemented")
+func (UnimplementedAgentServiceServer) Console(grpc.BidiStreamingServer[ConsoleRequest, ConsoleResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Console not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -426,23 +433,12 @@ func _AgentService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AgentService_GetConsoleToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetConsoleTokenRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AgentServiceServer).GetConsoleToken(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AgentService_GetConsoleToken_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AgentServiceServer).GetConsoleToken(ctx, req.(*GetConsoleTokenRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+func _AgentService_Console_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentServiceServer).Console(&grpc.GenericServerStream[ConsoleRequest, ConsoleResponse]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_ConsoleServer = grpc.BidiStreamingServer[ConsoleRequest, ConsoleResponse]
 
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -487,11 +483,14 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Heartbeat",
 			Handler:    _AgentService_Heartbeat_Handler,
 		},
+	},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "GetConsoleToken",
-			Handler:    _AgentService_GetConsoleToken_Handler,
+			StreamName:    "Console",
+			Handler:       _AgentService_Console_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "agent/v1/agent.proto",
 }

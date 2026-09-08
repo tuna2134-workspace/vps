@@ -1,28 +1,27 @@
 // Package e2e exercises the full provisioning flow against real PostgreSQL
-// and a real gRPC agent running in fake mode (no hypervisor). Cloud-init disk
-// generation, libvirt domain XML, IPAM, and operation lifecycle are all real.
+// and a real gRPC agent backed by a real libvirt + QEMU hypervisor. Requires
+// REAL_LIBVIRT=1 and a usable LIBVIRT_URI (run with sudo for qemu:///system).
 package e2e
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"google.golang.org/grpc"
+	"github.com/coder/websocket"
 
 	"github.com/tuna2134/vps/internal/agent/grpcserver"
-	"github.com/tuna2134/vps/internal/agent/image"
 	agentlibvirt "github.com/tuna2134/vps/internal/agent/libvirt"
-	"github.com/tuna2134/vps/internal/agent/manager"
-	"github.com/tuna2134/vps/internal/agent/metrics"
-	"github.com/tuna2134/vps/internal/agent/storage"
+	consolegateway "github.com/tuna2134/vps/internal/controlplane/console/gateway"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tuna2134/vps/internal/controlplane/agents"
@@ -64,6 +63,9 @@ func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	if err := migrations.EnsureDatabase(ctx, dsn); err != nil {
+		panic(err)
+	}
 	if err := migrations.WaitForDB(ctx, dsn, log, time.Second); err != nil {
 		panic(err)
 	}
@@ -103,7 +105,7 @@ func cleanTables(ctx context.Context, db *pgxpool.Pool) error {
 	return err
 }
 
-// e2eTest wires the control-plane services and a fake-mode agent together.
+// e2eTest wires the control-plane services and a real-libvirt agent together.
 type e2eTest struct {
 	userSvc     *users.Service
 	vmSvc       *vms.Service
@@ -113,7 +115,7 @@ type e2eTest struct {
 	billingSvc  *billing.Service
 	consoleSvc  *console.Service
 	agentServer *grpcserver.Server
-	agentFake   *agentlibvirt.FakeManager
+	real        *realLibvirtEnv
 	factory     *agents.Factory
 	agentAddr   string
 	provisioner *vms.Provisioner
@@ -133,38 +135,8 @@ func setupE2E(t *testing.T) *e2eTest {
 	planSvc := plans.NewService(pool.Plans, auditSvc)
 	netSvc := networks.NewService(pool.Networks, pool.IPPools, auditSvc)
 
-	// Fake-mode agent on a random port. FakeMode is false so the real manager
-	// flow runs (image fetch, cloud-init generation, domain XML, define/start)
-	// against an in-memory libvirt.
-	fake := agentlibvirt.NewFakeManager()
-	store := storage.New(fake)
-	workDir := t.TempDir()
-	mgr := manager.New(fake, store, nil, image.New(workDir), workDir, "default", log)
-	metricsProvider := metrics.NewProvider(fake)
-	agentServer := grpcserver.New(mgr, fake, metricsProvider, log, false)
-
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("agent listen: %v", err)
-	}
-	grpcSrv := grpc.NewServer()
-	agentv1.RegisterAgentServiceServer(grpcSrv, agentServer)
-	serveErr := make(chan error, 1)
-	go func() {
-		serveErr <- grpcSrv.Serve(lis)
-	}()
-	t.Cleanup(func() {
-		grpcSrv.Stop()
-		select {
-		case err := <-serveErr:
-			if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-				t.Logf("grpc server error: %v", err)
-			}
-		default:
-		}
-	})
-	// Wait for the server to actually accept connections.
-	waitForServer(t, lis.Addr().String())
+	// REAL libvirt agent: storage pool + bridge + kernel/initramfs image.
+	real := newRealLibvirtEnv(t)
 
 	factory := agents.NewFactory(grpcclient.Options{Timeout: 5 * time.Second})
 
@@ -182,12 +154,12 @@ func setupE2E(t *testing.T) *e2eTest {
 		return true, nil
 	})
 
-	// Create a cluster and register this fake agent as a node.
+	// Create a cluster and register the real agent as a node.
 	cluster, err := clusterSvc.CreateCluster(ctx, "e2e-cluster-"+suffix(), "e2e")
 	if err != nil {
 		t.Fatalf("create cluster: %v", err)
 	}
-	node, err := clusterSvc.RegisterNode(ctx, cluster.ID, "agent-"+suffix(), lis.Addr().String())
+	node, err := clusterSvc.RegisterNode(ctx, cluster.ID, "agent-"+suffix(), real.agentAddr)
 	if err != nil {
 		t.Fatalf("register node: %v", err)
 	}
@@ -199,8 +171,8 @@ func setupE2E(t *testing.T) *e2eTest {
 	return &e2eTest{
 		userSvc: userSvc, vmSvc: vmSvc, clusterSvc: clusterSvc, planSvc: planSvc,
 		netSvc: netSvc, billingSvc: billingSvc, consoleSvc: consoleSvc,
-		agentServer: agentServer, agentFake: fake, factory: factory,
-		agentAddr: lis.Addr().String(), provisioner: provisioner,
+		agentServer: real.agentServer, real: real, factory: factory,
+		agentAddr: real.agentAddr, provisioner: provisioner,
 	}
 }
 
@@ -209,21 +181,90 @@ type e2eConsoleAgent struct {
 	factory *agents.Factory
 }
 
-func (a *e2eConsoleAgent) GetConsoleToken(ctx context.Context, endpoint, vmID, vmName, consoleType string) (*console.Endpoint, error) {
+func (a *e2eConsoleAgent) OpenConsole(ctx context.Context, endpoint, vmID, vmName, consoleType string) (console.Stream, error) {
 	client, err := a.factory.Client(ctx, endpoint)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.GetConsoleToken(ctx, &agentv1.GetConsoleTokenRequest{VmId: vmID, VmName: vmName, ConsoleType: consoleType}, 5*time.Second)
+	stream, err := client.Console(ctx, vmID, vmName, consoleType, 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	return &console.Endpoint{
-		ConsoleType: consoleType,
-		Host:        resp.GetHost(),
-		Port:        int(resp.GetPort()),
-		Path:        resp.GetSerialPath(),
-	}, nil
+	return &e2eGRPCStream{stream: stream}, nil
+}
+
+// e2eGRPCStream adapts the raw gRPC bidi stream to console.Stream.
+type e2eGRPCStream struct {
+	stream agentv1.AgentService_ConsoleClient
+}
+
+func (s *e2eGRPCStream) Send(data []byte) error {
+	return s.stream.Send(&agentv1.ConsoleRequest{Data: data})
+}
+
+func (s *e2eGRPCStream) Recv() ([]byte, error) {
+	resp, err := s.stream.Recv()
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetData(), nil
+}
+
+func (s *e2eGRPCStream) Close() error {
+	return s.stream.CloseSend()
+}
+
+// readRealSerialConsole connects a WebSocket client to the console gateway and
+// talks to the REAL VM's serial console: reads the boot banner, sends
+// "hello-real", and reads the guest's echo. The one-time token is consumed by
+// the gateway.
+func readRealSerialConsole(t *testing.T, te *e2eTest, rawToken, vmName string) (banner, echo string, err error) {
+	t.Helper()
+	gateway := consolegateway.New(te.consoleSvc, log)
+	srv := httptest.NewServer(http.HandlerFunc(gateway.HandleWS))
+	defer srv.Close()
+
+	wsURL := "ws" + srv.URL[len("http"):] + "/console/ws?token=" + rawToken
+	ws, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{HTTPClient: &http.Client{Timeout: 10 * time.Second}})
+	if err != nil {
+		return "", "", fmt.Errorf("websocket dial: %w", err)
+	}
+	defer ws.Close(websocket.StatusNormalClosure, "done")
+
+	// Read until the guest banner appears.
+	var bannerBuf bytes.Buffer
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		_, data, rerr := ws.Read(context.Background())
+		if rerr != nil {
+			return bannerBuf.String(), "", fmt.Errorf("read banner: %w", rerr)
+		}
+		bannerBuf.Write(data)
+		if strings.Contains(bannerBuf.String(), "console ready") {
+			break
+		}
+	}
+	if !strings.Contains(bannerBuf.String(), "console ready") {
+		return bannerBuf.String(), "", fmt.Errorf("no banner within deadline: %q", bannerBuf.String())
+	}
+
+	// Send input; read the guest echo.
+	if err := ws.Write(context.Background(), websocket.MessageText, []byte("hello-real\n")); err != nil {
+		return bannerBuf.String(), "", fmt.Errorf("write: %w", err)
+	}
+	var echoBuf bytes.Buffer
+	deadline = time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		_, data, rerr := ws.Read(context.Background())
+		if rerr != nil {
+			return bannerBuf.String(), echoBuf.String(), fmt.Errorf("read echo: %w", rerr)
+		}
+		echoBuf.Write(data)
+		if strings.Contains(echoBuf.String(), "console-echo:hello-real") {
+			break
+		}
+	}
+	return bannerBuf.String(), echoBuf.String(), nil
 }
 
 func TestEndToEndProvisioningFlow(t *testing.T) {
@@ -250,12 +291,6 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 		t.Fatalf("authenticate: %v", err)
 	}
 
-	// 3. Create a small real image file the agent can "fetch".
-	imagePath := filepath.Join(t.TempDir(), "ubuntu.qcow2")
-	if err := os.WriteFile(imagePath, make([]byte, 1024), 0o644); err != nil {
-		t.Fatalf("write image: %v", err)
-	}
-
 	uniq := suffix()
 	plan, err := te.planSvc.Create(ctx, &models.Plan{
 		Name: "e2e-plan-" + uniq, VCPU: 2, MemoryMB: 2048, DiskGB: 20, MonthlyPriceCents: 1000, Currency: "USD",
@@ -264,7 +299,7 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 		t.Fatalf("create plan: %v", err)
 	}
 	net, err := te.netSvc.CreateNetwork(ctx, &models.Network{
-		Name: "e2e-net-" + uniq, Bridge: "br-e2e", DNS1: "1.1.1.1", DNS2: "1.0.0.1",
+		Name: "e2e-net-" + uniq, Bridge: te.real.bridgeName, DNS1: "1.1.1.1", DNS2: "1.0.0.1",
 	})
 	if err != nil {
 		t.Fatalf("create network: %v", err)
@@ -272,8 +307,12 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 	if _, err := te.netSvc.AddPool(ctx, &models.IPPool{NetworkID: net.ID, CIDR: "203.0.113.0/28", Type: "ipv4", Gateway: "203.0.113.1"}); err != nil {
 		t.Fatalf("add pool: %v", err)
 	}
+	// Kernel-boot image: the VM boots the host kernel + a minimal initramfs
+	// that runs a serial shell (real boot, no OS image needed).
+	kernelURL, initrdURL, cmdline := te.real.kernelImage("ubuntu", uniq)
 	img, err := pool.Images.Create(ctx, &models.Image{
-		Name: "ubuntu", Version: "24.04-" + uniq, Format: "qcow2", SourceURL: imagePath, CloudInitCompatible: true,
+		Name: "ubuntu", Version: "24.04-" + uniq, Format: "raw", SourceURL: "/dev/null",
+		CloudInitCompatible: false, KernelURL: kernelURL, InitrdURL: initrdURL, Cmdline: cmdline,
 	})
 	if err != nil {
 		t.Fatalf("create image: %v", err)
@@ -337,55 +376,61 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 		t.Errorf("invalid allocated ip: %s", allocs[0].IPAddress)
 	}
 
-	// 8. The agent received the create (fake manager has the domain).
+	// 8. The real agent defined and started the domain (kernel boot).
 	vmName := "vps-" + vm.InstanceID
-	if !te.agentFake.HasDomain(vmName) {
-		t.Error("agent did not receive/define the domain")
-	}
-
-	// 8b. Storage volumes (root + cloud-init) were created and uploaded.
-	if !te.agentFake.HasVolume("default", "vps-"+vm.ID+"-root") {
-		t.Error("root volume was not created on the agent")
-	}
-	if !te.agentFake.HasVolume("default", "vps-"+vm.ID+"-cloudinit") {
-		t.Error("cloud-init volume was not created on the agent")
-	}
-	// The cloud-init volume must have received an upload. The temp ISO is
-	// deleted by the agent after upload (verified by the cloudinit unit test
-	// which validates the ISO magic bytes).
-	if cidata := te.agentFake.VolumeDataFile("default", "vps-"+vm.ID+"-cloudinit"); cidata == "" {
-		t.Error("cloud-init volume has no uploaded data")
-	}
-
-	// 8c. Console tokens: VNC and serial both issue and consume correctly.
-	vncTok, vncRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vm.Name, te.agentAddr, console.TypeVNC)
+	state, err := te.real.adapter.GetDomainState(vmName)
 	if err != nil {
-		t.Fatalf("issue vnc console: %v", err)
+		t.Fatalf("get real domain state: %v", err)
 	}
-	if vncTok.ConsoleType != console.TypeVNC || vncTok.Port == 0 {
-		t.Errorf("vnc token wrong: %+v", vncTok)
-	}
-	consumedVNC, err := te.consoleSvc.Consume(ctx, vncRaw)
-	if err != nil {
-		t.Fatalf("consume vnc token: %v", err)
-	}
-	if consumedVNC.VMID != vm.ID {
-		t.Errorf("consumed vnc token vm mismatch: %s", consumedVNC.VMID)
+	if state != agentlibvirt.StateRunning {
+		t.Errorf("expected real domain running, got %s", state)
 	}
 
+	// 8b. The cloud-init seed volume was created and uploaded on the real pool.
+	ciVol := "vps-" + vm.ID + "-cloudinit"
+	vi, err := te.real.adapter.GetVolume(te.real.poolName, ciVol)
+	if err != nil {
+		t.Errorf("cloud-init volume not found on real libvirt: %v", err)
+	} else if vi.CapacityBytes == 0 {
+		t.Errorf("cloud-init volume empty: %+v", vi)
+	}
+
+	// 8c. Serial console over the REAL VM via the streaming Console RPC.
 	serialTok, serialRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vm.Name, te.agentAddr, console.TypeSerial)
 	if err != nil {
 		t.Fatalf("issue serial console: %v", err)
 	}
-	if serialTok.ConsoleType != console.TypeSerial || serialTok.Path == "" {
+	if serialTok.ConsoleType != console.TypeSerial || serialTok.NodeEndpoint == "" {
 		t.Errorf("serial token wrong: %+v", serialTok)
 	}
-	consumedSerial, err := te.consoleSvc.Consume(ctx, serialRaw)
+	// Connect through the WebSocket gateway to the real VM's serial console.
+	banner, echo, err := readRealSerialConsole(t, te, serialRaw, vm.Name)
 	if err != nil {
-		t.Fatalf("consume serial token: %v", err)
+		t.Fatalf("serial console over real VM: %v", err)
 	}
-	if consumedSerial.ConsoleType != console.TypeSerial || consumedSerial.Path == "" {
-		t.Errorf("consumed serial token wrong: %+v", consumedSerial)
+	if !strings.Contains(banner, "VPS real-libvirt console ready") {
+		t.Errorf("unexpected real serial banner: %q", banner)
+	}
+	if !strings.Contains(echo, "console-echo:hello-real") {
+		t.Errorf("unexpected real serial echo: %q", echo)
+	}
+	consumedSerial, err := te.consoleSvc.Consume(ctx, serialRaw)
+	if err == nil {
+		t.Error("serial token must be single-use")
+	} else if consumedSerial != nil {
+		t.Errorf("unexpected consumed token: %+v", consumedSerial)
+	}
+
+	// 8d. VNC token issues (OpenGraphicsFD verified in tests/real).
+	vncTok, vncRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vm.Name, te.agentAddr, console.TypeVNC)
+	if err != nil {
+		t.Fatalf("issue vnc console: %v", err)
+	}
+	if vncTok.ConsoleType != console.TypeVNC || vncTok.NodeEndpoint != te.agentAddr {
+		t.Errorf("vnc token wrong: %+v", vncTok)
+	}
+	if _, err := te.consoleSvc.Consume(ctx, vncRaw); err != nil {
+		t.Fatalf("consume vnc token: %v", err)
 	}
 
 	// 9. Stop the VM.
@@ -431,9 +476,9 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 		t.Errorf("expected vm terminated, got %s", deleted.Status)
 	}
 
-	// 13. The fake agent's domain was undefined.
-	if te.agentFake.HasDomain(vmName) {
-		t.Error("agent domain should have been removed")
+	// 13. The real agent's domain was undefined after deletion.
+	if _, err := te.real.adapter.GetDomainState(vmName); err == nil {
+		t.Error("agent domain should have been removed from real libvirt")
 	}
 
 	// 14. Idempotency: creating with the same key returns the same op and does

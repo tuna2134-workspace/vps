@@ -17,12 +17,12 @@ func NewConsoleTokenRepository(db DBTX) *ConsoleTokenRepository {
 	return &ConsoleTokenRepository{db: db}
 }
 
-const consoleTokenCols = `id, vm_id, user_id, token_hash, console_type, host, port, path, expires_at, used_at, created_at`
+const consoleTokenCols = `id, vm_id, user_id, token_hash, console_type, node_endpoint, vm_name, expires_at, used_at, created_at`
 
 func scanConsoleToken(row pgx.Row) (*models.ConsoleToken, error) {
 	var t models.ConsoleToken
 	if err := row.Scan(&t.ID, &t.VMID, &t.UserID, &t.TokenHash, &t.ConsoleType,
-		&t.Host, &t.Port, &t.Path, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt); err != nil {
+		&t.NodeEndpoint, &t.VMName, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -30,10 +30,11 @@ func scanConsoleToken(row pgx.Row) (*models.ConsoleToken, error) {
 
 func (r *ConsoleTokenRepository) Create(ctx context.Context, t *models.ConsoleToken) (*models.ConsoleToken, error) {
 	row := r.db.QueryRow(ctx, `
-		INSERT INTO console_tokens (vm_id, user_id, token_hash, console_type, host, port, path, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO console_tokens (vm_id, user_id, token_hash, console_type, node_endpoint, vm_name, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+consoleTokenCols,
-		t.VMID, t.UserID, t.TokenHash, t.ConsoleType, t.Host, t.Port, t.Path, t.ExpiresAt)
+		t.VMID, t.UserID, t.TokenHash, t.ConsoleType,
+		t.NodeEndpoint, t.VMName, t.ExpiresAt)
 	created, err := scanConsoleToken(row)
 	if err != nil {
 		return nil, fmt.Errorf("create console token: %w", err)

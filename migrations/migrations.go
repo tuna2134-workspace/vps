@@ -7,6 +7,7 @@ package migrations
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 //go:embed *.sql
@@ -169,4 +171,39 @@ func WaitForDB(ctx context.Context, dsn string, log *slog.Logger, interval time.
 		case <-ticker.C:
 		}
 	}
+}
+
+// EnsureDatabase creates the target database if it does not exist, so tests
+// and tooling can run against a fresh server without manual setup. It connects
+// to the "postgres" maintenance database on the same server.
+func EnsureDatabase(ctx context.Context, dsn string) error {
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("parse dsn: %w", err)
+	}
+	dbName := cfg.Database
+	if dbName == "" {
+		return fmt.Errorf("dsn has no database name")
+	}
+	// Point the connection at the maintenance database.
+	cfg.Database = "postgres"
+
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("connect to postgres maintenance db: %w", err)
+	}
+	defer conn.Close(ctx)
+
+	// CREATE DATABASE cannot run inside a transaction block; pgx auto-commits
+	// a standalone statement.
+	_, err = conn.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{dbName}.Sanitize())
+	if err != nil {
+		// 42P04 = duplicate_database; ignore.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P04" {
+			return nil
+		}
+		return fmt.Errorf("create database %s: %w", dbName, err)
+	}
+	return nil
 }

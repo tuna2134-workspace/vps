@@ -1,5 +1,5 @@
 // Command agent runs a compute node agent: it exposes the gRPC AgentService
-// and manages VMs on the local host via libvirt, iptables, and cloud-init.
+// and manages VMs on the local host via libvirt, nftables, and cloud-init.
 package main
 
 import (
@@ -52,35 +52,25 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("create work dir: %w", err)
 	}
 
-	var lv agentlibvirt.Manager
-	if cfg.FakeMode {
-		log.Info("running in fake mode (no hypervisor)")
-		lv = agentlibvirt.NewFakeManager()
-	} else {
-		lv = agentlibvirt.NewAdapter(cfg.LibvirtURI)
-		if err := lv.Connect(); err != nil {
-			return err
-		}
-		defer lv.Close()
+	lv := agentlibvirt.NewAdapter(cfg.LibvirtURI)
+	if err := lv.Connect(); err != nil {
+		return err
 	}
+	defer lv.Close()
 
 	store := storage.New(lv)
 	fetcher := image.New(filepath.Join(cfg.WorkDir, "images"))
 
-	var ipt *network.IptablesManager
-	if cfg.FakeMode {
-		ipt = nil
-	} else {
-		var err error
-		ipt, err = network.NewIptablesManager()
-		if err != nil {
-			log.Warn("iptables unavailable (continuing)", "error", err)
-		}
+	var ipt network.Firewall
+	var err error
+	ipt, err = network.NewNftablesManager()
+	if err != nil {
+		log.Warn("nftables unavailable (continuing without IP/MAC binding)", "error", err)
 	}
 
 	mgr := manager.New(lv, store, ipt, fetcher, cfg.WorkDir, cfg.StoragePool, log)
 	metricsProvider := metrics.NewProvider(lv)
-	server := grpcserver.New(mgr, lv, metricsProvider, log, cfg.FakeMode)
+	server := grpcserver.New(mgr, lv, metricsProvider, log)
 
 	opts := []grpc.ServerOption{}
 	if cfg.TLS {

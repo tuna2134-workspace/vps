@@ -32,6 +32,9 @@ func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	if err := migrations.EnsureDatabase(ctx, dsn); err != nil {
+		panic(err)
+	}
 	if err := migrations.WaitForDB(ctx, dsn, testLogger(), time.Second); err != nil {
 		panic(err)
 	}

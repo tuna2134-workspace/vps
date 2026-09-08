@@ -24,7 +24,7 @@ gRPC (optionally mTLS):
        ┌────────────┐    ┌────────────┐   ┌────────────┐
        │   Agent    │    │   Agent    │   │   Agent    │
        │ libvirt    │    │ libvirt    │   │ libvirt    │
-       │ iptables   │    │ iptables   │   │ iptables   │
+       │ nftables   │    │ nftables   │   │ nftables   │
        │ cloud-init │    │ cloud-init │   │ cloud-init │
        └────────────┘    └────────────┘   └────────────┘
 ```
@@ -59,7 +59,7 @@ performs the actual virtualization work on the host:
 - Storage volumes via libvirt
 - cloud-init NoCloud seed disk generation (`go-diskfs`)
 - Image fetch + checksum verification
-- iptables IP/MAC anti-spoofing binding
+- nftables IP/MAC anti-spoofing binding
 - Domain XML generation (official `libvirt.org/go/libvirtxml`)
 - VNC endpoint exposure (loopback only) for the console gateway
 
@@ -76,7 +76,7 @@ replaceable and lets the Control Plane drive reconciliation.
 6. A `create` operation is persisted with an idempotency key
 7. A worker calls `AgentService.CreateVM` over gRPC
 8. Agent fetches the image, creates volumes, generates + uploads the
-   cloud-init ISO, configures iptables, defines and starts the domain
+   cloud-init ISO, configures nftables, defines and starts the domain
 9. Control Plane marks the operation succeeded and the VM `running`
 
 ## Cross-cutting concerns
@@ -87,7 +87,7 @@ replaceable and lets the Control Plane drive reconciliation.
 - **Security**: Argon2id passwords, hashed session tokens, generic login
   errors (no enumeration), rate limiting, PII isolation, signature-verified
   webhooks
-- **Cleanup**: agents remove temp files, volumes, and iptables rules on
+- **Cleanup**: agents remove temp files, volumes, and nftables rules on
   failure/teardown
 
 ## Directory layout
@@ -114,7 +114,7 @@ internal/agent/libvirt        libvirt adapter (official bindings)
 internal/agent/libvirt/*.go   domain XML via libvirt-go-xml
 internal/agent/cloudinit      NoCloud seed generation
 internal/agent/image          image fetch + checksum
-internal/agent/network        iptables IP/MAC binding
+internal/agent/network        nftables IP/MAC binding
 internal/agent/storage        storage volume abstraction
 internal/agent/grpcserver     AgentService implementation
 migrations/                   SQL migrations (embedded)

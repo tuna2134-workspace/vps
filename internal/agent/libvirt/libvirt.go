@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	libvirt "libvirt.org/go/libvirt"
+	libvirtxml "libvirt.org/go/libvirtxml"
 )
 
 // VMState is the normalized lifecycle state.
@@ -61,6 +63,15 @@ type InterfaceInfo struct {
 	IPv6       []string
 }
 
+// ConsoleStream is a bidirectional byte stream to a domain's console, opened
+// via the official virDomainOpenConsole API.
+type ConsoleStream interface {
+	Send(p []byte) (int, error)
+	Recv(p []byte) (int, error)
+	// Close releases the stream and the underlying domain handle.
+	Close() error
+}
+
 // DiskInfo describes a domain disk.
 type DiskInfo struct {
 	Device          string
@@ -92,11 +103,15 @@ type Manager interface {
 	// Domain resources.
 	GetDomainInterfaces(name string) ([]InterfaceInfo, error)
 	GetDomainDisks(name string) ([]DiskInfo, error)
-	GetVNCInfo(name string) (host string, port int, err error)
-	GetSerialInfo(name string) (ptyPath string, err error)
+	// OpenConsole opens the VM's serial console via virDomainOpenConsole.
+	OpenConsole(name string) (ConsoleStream, error)
+	// OpenGraphics opens the VM's VNC graphics device via
+	// virDomainOpenGraphicsFD, returning a connected byte stream.
+	OpenGraphics(name string) (ConsoleStream, error)
 
 	// Storage.
 	CreateVolume(pool, name string, capacityBytes uint64) (*VolumeInfo, error)
+	CreateVolumeWithFormat(pool, name string, capacityBytes uint64, format string) (*VolumeInfo, error)
 	VolumeExists(pool, name string) (bool, error)
 	UploadVolumeFile(pool, name, path string) error
 	DeleteVolume(pool, name string) error
@@ -145,6 +160,16 @@ func (a *Adapter) withConn(fn func(*libvirt.Connect) error) error {
 	if a.conn == nil {
 		if err := a.Connect(); err != nil {
 			return err
+		}
+	}
+	return fn(a.conn)
+}
+
+// withConnResult is like withConn but returns a value.
+func (a *Adapter) withConnResult(fn func(*libvirt.Connect) (ConsoleStream, error)) (ConsoleStream, error) {
+	if a.conn == nil {
+		if err := a.Connect(); err != nil {
+			return nil, err
 		}
 	}
 	return fn(a.conn)
@@ -405,25 +430,107 @@ func (a *Adapter) GetDomainDisks(name string) ([]DiskInfo, error) {
 	return parseDomainDisks(xml)
 }
 
-// GetVNCInfo parses the domain XML for the VNC graphics endpoint.
-func (a *Adapter) GetVNCInfo(name string) (string, int, error) {
-	xml, err := a.GetDomainXML(name)
-	if err != nil {
-		return "", 0, err
-	}
-	return parseVNCInfo(xml)
+// OpenConsole opens a stream to the VM's serial console using the official
+// virDomainOpenConsole API.
+func (a *Adapter) OpenConsole(name string) (ConsoleStream, error) {
+	return a.withConnResult(func(c *libvirt.Connect) (ConsoleStream, error) {
+		dom, err := c.LookupDomainByName(name)
+		if err != nil {
+			return nil, fmt.Errorf("lookup domain %s: %w", name, err)
+		}
+		st, err := c.NewStream(0)
+		if err != nil {
+			_ = dom.Free()
+			return nil, fmt.Errorf("open stream: %w", err)
+		}
+		if err := dom.OpenConsole("", st, libvirt.DOMAIN_CONSOLE_FORCE); err != nil {
+			_ = st.Abort()
+			_ = st.Free()
+			_ = dom.Free()
+			return nil, fmt.Errorf("open console %s: %w", name, err)
+		}
+		return &adapterConsoleStream{dom: dom, stream: st}, nil
+	})
 }
 
-// GetSerialInfo parses the domain XML for the serial console PTY path.
-func (a *Adapter) GetSerialInfo(name string) (string, error) {
-	xml, err := a.GetDomainXML(name)
+// OpenGraphics opens the VM's VNC graphics device using the official
+// virDomainOpenGraphicsFD API, which returns a socket already connected to the
+// VNC server. The VNC server is never exposed on a network port.
+func (a *Adapter) OpenGraphics(name string) (ConsoleStream, error) {
+	return a.withConnResult(func(c *libvirt.Connect) (ConsoleStream, error) {
+		dom, err := c.LookupDomainByName(name)
+		if err != nil {
+			return nil, fmt.Errorf("lookup domain %s: %w", name, err)
+		}
+		fd, err := dom.OpenGraphicsFD(0, libvirt.DOMAIN_OPEN_GRAPHICS_SKIPAUTH)
+		if err != nil {
+			_ = dom.Free()
+			return nil, fmt.Errorf("open graphics %s: %w", name, err)
+		}
+		return &adapterFileStream{dom: dom, file: fd}, nil
+	})
+}
+
+// adapterConsoleStream wraps the libvirt stream + domain for a console.
+type adapterConsoleStream struct {
+	dom    *libvirt.Domain
+	stream *libvirt.Stream
+}
+
+func (c *adapterConsoleStream) Send(p []byte) (int, error) {
+	n, err := c.stream.Send(p)
 	if err != nil {
-		return "", err
+		return n, fmt.Errorf("console send: %w", err)
 	}
-	return parseSerialInfo(xml)
+	return n, nil
+}
+
+func (c *adapterConsoleStream) Recv(p []byte) (int, error) {
+	n, err := c.stream.Recv(p)
+	if err != nil {
+		return n, fmt.Errorf("console recv: %w", err)
+	}
+	return n, nil
+}
+
+func (c *adapterConsoleStream) Close() error {
+	_ = c.stream.Abort()
+	_ = c.stream.Free()
+	return c.dom.Free()
+}
+
+// adapterFileStream wraps a libvirt-returned fd + domain for a console.
+type adapterFileStream struct {
+	dom  *libvirt.Domain
+	file *os.File
+}
+
+func (f *adapterFileStream) Send(p []byte) (int, error) {
+	n, err := f.file.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("graphics send: %w", err)
+	}
+	return n, nil
+}
+
+func (f *adapterFileStream) Recv(p []byte) (int, error) {
+	n, err := f.file.Read(p)
+	if err != nil {
+		return n, fmt.Errorf("graphics recv: %w", err)
+	}
+	return n, nil
+}
+
+func (f *adapterFileStream) Close() error {
+	_ = f.file.Close()
+	return f.dom.Free()
 }
 
 func (a *Adapter) CreateVolume(pool, name string, capacityBytes uint64) (*VolumeInfo, error) {
+	return a.CreateVolumeWithFormat(pool, name, capacityBytes, "qcow2")
+}
+
+func (a *Adapter) CreateVolumeWithFormat(pool, name string, capacityBytes uint64, format string) (*VolumeInfo, error) {
 	var info *VolumeInfo
 	err := a.withConn(func(c *libvirt.Connect) error {
 		poolObj, err := c.LookupStoragePoolByName(pool)
@@ -431,16 +538,33 @@ func (a *Adapter) CreateVolume(pool, name string, capacityBytes uint64) (*Volume
 			return fmt.Errorf("lookup pool %s: %w", pool, err)
 		}
 		defer poolObj.Free()
-		xml := fmt.Sprintf(`
-<volume>
-  <name>%s</name>
-  <capacity unit="bytes">%d</capacity>
-  <allocation unit="bytes">0</allocation>
-  <target>
-    <format type="qcow2"/>
-  </target>
-</volume>`, name, capacityBytes)
-		vol, err := poolObj.StorageVolCreateXML(xml, libvirt.STORAGE_VOL_CREATE_PREALLOC_METADATA)
+
+		// Render the volume XML with the official libvirt-go-xml bindings.
+		volDoc := &libvirtxml.StorageVolume{
+			Name: name,
+			Capacity: &libvirtxml.StorageVolumeSize{
+				Unit:  "bytes",
+				Value: capacityBytes,
+			},
+			Allocation: &libvirtxml.StorageVolumeSize{
+				Unit:  "bytes",
+				Value: 0,
+			},
+			Target: &libvirtxml.StorageVolumeTarget{
+				Format: &libvirtxml.StorageVolumeTargetFormat{Type: format},
+			},
+		}
+		xml, err := volDoc.Marshal()
+		if err != nil {
+			return fmt.Errorf("marshal volume xml: %w", err)
+		}
+
+		// Metadata preallocation is only valid for qcow2 (and a few others).
+		flags := libvirt.StorageVolCreateFlags(0)
+		if format == "qcow2" {
+			flags = libvirt.STORAGE_VOL_CREATE_PREALLOC_METADATA
+		}
+		vol, err := poolObj.StorageVolCreateXML(xml, flags)
 		if err != nil {
 			return fmt.Errorf("create volume %s: %w", name, err)
 		}
@@ -494,7 +618,7 @@ func (a *Adapter) UploadVolumeFile(pool, name, path string) error {
 			return fmt.Errorf("get volume info %s: %w", name, err)
 		}
 
-		stream, err := c.NewStream(libvirt.STREAM_NONBLOCK)
+		stream, err := c.NewStream(0)
 		if err != nil {
 			return fmt.Errorf("open stream: %w", err)
 		}

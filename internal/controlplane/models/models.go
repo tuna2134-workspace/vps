@@ -190,6 +190,9 @@ type Image struct {
 	Checksum            string    `json:"-"`
 	SizeBytes           int64     `json:"size_bytes"`
 	CloudInitCompatible bool      `json:"cloud_init_compatible"`
+	KernelURL           string    `json:"-"`
+	InitrdURL           string    `json:"-"`
+	Cmdline             string    `json:"-"`
 	Status              string    `json:"status"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
@@ -305,17 +308,16 @@ type Payment struct {
 }
 
 type ConsoleToken struct {
-	ID          string     `json:"id"`
-	VMID        string     `json:"vm_id"`
-	UserID      string     `json:"user_id"`
-	TokenHash   string     `json:"-"`
-	ConsoleType string     `json:"console_type"`
-	Host        string     `json:"-"`
-	Port        int        `json:"-"`
-	Path        string     `json:"-"`
-	ExpiresAt   time.Time  `json:"expires_at"`
-	UsedAt      *time.Time `json:"used_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID           string     `json:"id"`
+	VMID         string     `json:"vm_id"`
+	UserID       string     `json:"user_id"`
+	TokenHash    string     `json:"-"`
+	ConsoleType  string     `json:"console_type"`
+	NodeEndpoint string     `json:"-"`
+	VMName       string     `json:"-"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	UsedAt       *time.Time `json:"used_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type AuditLog struct {

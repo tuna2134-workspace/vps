@@ -19,6 +19,13 @@ type DomainConfig struct {
 	CloudInitPool   string
 	// VNC password (empty disables password).
 	VNCPassword string
+	// Kernel/initrd direct boot (used for tests / minimal images). When set,
+	// the domain boots the kernel with the given cmdline instead of from disk.
+	Kernel  string
+	Initrd  string
+	Cmdline string
+	// Emulator binary path (defaults to /usr/bin/qemu-system-x86_64).
+	Emulator string
 }
 
 type DomainDisk struct {
@@ -42,9 +49,6 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 	if cfg.Name == "" || cfg.MemoryBytes == 0 || cfg.VCPU == 0 {
 		return "", fmt.Errorf("domain requires name, memory and vcpu")
 	}
-	if len(cfg.Interfaces) == 0 {
-		return "", fmt.Errorf("domain requires at least one interface")
-	}
 
 	memory := uint(cfg.MemoryBytes)
 	vcpu := uint(cfg.VCPU)
@@ -67,7 +71,6 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 				Machine: "q35",
 				Type:    "hvm",
 			},
-			BootDevices: []libvirtxml.DomainBootDevice{{Dev: "hd"}},
 		},
 		Features: &libvirtxml.DomainFeatureList{
 			ACPI: &libvirtxml.DomainFeature{},
@@ -75,8 +78,21 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 		},
 		CPU: &libvirtxml.DomainCPU{Mode: "host-passthrough"},
 		Devices: &libvirtxml.DomainDeviceList{
-			Emulator: "/usr/bin/qemu-system-x86_64",
+			Emulator: cfg.Emulator,
 		},
+	}
+	if cfg.Emulator == "" {
+		domain.Devices.Emulator = "/usr/bin/qemu-system-x86_64"
+	}
+
+	// Kernel/initrd direct boot when configured, otherwise boot from disk.
+	switch {
+	case cfg.Kernel != "":
+		domain.OS.Kernel = cfg.Kernel
+		domain.OS.Initrd = cfg.Initrd
+		domain.OS.Cmdline = cfg.Cmdline
+	default:
+		domain.OS.BootDevices = []libvirtxml.DomainBootDevice{{Dev: "hd"}}
 	}
 
 	// Disks.

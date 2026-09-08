@@ -1,5 +1,5 @@
 // Package manager implements the agent-side VM provisioning workflow:
-// fetch image → import volume → cloud-init seed → upload → iptables binding →
+// fetch image → import volume → cloud-init seed → upload → nftables binding →
 // define → start.
 package manager
 
@@ -30,7 +30,7 @@ var (
 type Manager struct {
 	libvirt     libvirt.Manager
 	storage     storage.Storage
-	networks    *network.IptablesManager
+	networks    network.Firewall
 	fetcher     *image.Fetcher
 	workDir     string
 	defaultPool string
@@ -41,7 +41,7 @@ type Manager struct {
 func New(
 	lv libvirt.Manager,
 	store storage.Storage,
-	ipt *network.IptablesManager,
+	ipt network.Firewall,
 	fetcher *image.Fetcher,
 	workDir, defaultPool string,
 	log *slog.Logger,
@@ -83,17 +83,38 @@ func (m *Manager) CreateVM(ctx context.Context, req *agentv1.CreateVMRequest) er
 	_ = m.storage.DeleteVolume(pool, rootVol)
 	_ = m.storage.DeleteVolume(pool, cloudVol)
 
-	// 1. Fetch the base image.
-	img, err := m.fetcher.Fetch(ctx, req.GetImage().GetSourceUrl(), req.GetImage().GetChecksum(), int64(req.GetImage().GetSizeBytes()))
-	if err != nil {
-		return fmt.Errorf("fetch image: %w", err)
-	}
+	// Direct-kernel boot (minimal/rescue images): no root disk is uploaded;
+	// the domain boots kernel+initrd instead.
+	kernelBoot := req.GetImage().GetKernelUrl() != ""
+	var kernelPath, initrdPath string
+	if kernelBoot {
+		kres, err := m.fetcher.Fetch(ctx, req.GetImage().GetKernelUrl(), "", 0)
+		if err != nil {
+			return fmt.Errorf("fetch kernel: %w", err)
+		}
+		kernelPath = kres.Path
+		defer m.cleanupFile(kernelPath)
+		if req.GetImage().GetInitrdUrl() != "" {
+			ires, err := m.fetcher.Fetch(ctx, req.GetImage().GetInitrdUrl(), "", 0)
+			if err != nil {
+				return fmt.Errorf("fetch initrd: %w", err)
+			}
+			initrdPath = ires.Path
+			defer m.cleanupFile(initrdPath)
+		}
+	} else {
+		// 1. Fetch the base image.
+		img, err := m.fetcher.Fetch(ctx, req.GetImage().GetSourceUrl(), req.GetImage().GetChecksum(), int64(req.GetImage().GetSizeBytes()))
+		if err != nil {
+			return fmt.Errorf("fetch image: %w", err)
+		}
 
-	// 2. Create + upload the root disk volume.
-	if err := m.createRootDisk(ctx, pool, rootVol, img.Path, req.GetDiskSizeBytes()); err != nil {
-		return err
+		// 2. Create + upload the root disk volume.
+		if err := m.createRootDisk(ctx, pool, rootVol, img.Path, req.GetDiskSizeBytes()); err != nil {
+			return err
+		}
+		defer m.cleanupFile(img.Path)
 	}
-	defer m.cleanupFile(img.Path)
 
 	// 3. Generate + upload the cloud-init seed volume.
 	isoPath, err := m.generateCloudInit(ctx, req)
@@ -105,7 +126,7 @@ func (m *Manager) CreateVM(ctx context.Context, req *agentv1.CreateVMRequest) er
 		return err
 	}
 
-	// 4. Configure iptables IP/MAC binding.
+	// 4. Configure nftables IP/MAC binding.
 	if m.networks != nil {
 		if err := m.configureFirewall(req); err != nil {
 			return err
@@ -113,7 +134,7 @@ func (m *Manager) CreateVM(ctx context.Context, req *agentv1.CreateVMRequest) er
 	}
 
 	// 5. Build and define the domain.
-	xml, err := m.buildDomainXML(req, pool, rootVol, cloudVol)
+	xml, err := m.buildDomainXML(req, pool, rootVol, cloudVol, kernelPath, initrdPath, kernelBoot)
 	if err != nil {
 		return err
 	}
@@ -215,41 +236,48 @@ func (m *Manager) configureFirewall(req *agentv1.CreateVMRequest) error {
 	return m.networks.BindVMCreates(req.GetVmId(), mac, v4, v6)
 }
 
-func (m *Manager) buildDomainXML(req *agentv1.CreateVMRequest, pool, rootVol, cloudVol string) (string, error) {
-	rootPath, err := m.storage.VolumePath(pool, rootVol)
-	if err != nil {
-		return "", fmt.Errorf("root volume path: %w", err)
-	}
-	cloudPath, err := m.storage.VolumePath(pool, cloudVol)
-	if err != nil {
-		return "", fmt.Errorf("cloud-init volume path: %w", err)
-	}
-
+func (m *Manager) buildDomainXML(req *agentv1.CreateVMRequest, pool, rootVol, cloudVol, kernelPath, initrdPath string, kernelBoot bool) (string, error) {
 	cfg := libvirt.DomainConfig{
 		Name:        req.GetVmName(),
 		UUID:        req.GetVmId(),
 		MemoryBytes: req.GetMemoryBytes(),
 		VCPU:        uint32(req.GetVcpu()),
 		VNCPassword: randomPassword(),
-		Disks: []libvirt.DomainDisk{
-			{
-				Device:    "disk",
-				Type:      "file",
-				Source:    rootPath,
-				Driver:    "qcow2",
-				TargetDev: "vda",
-				Writable:  true,
-			},
-			{
-				Device:    "cdrom",
-				Type:      "file",
-				Source:    cloudPath,
-				Driver:    "raw",
-				TargetDev: "hda",
-				Writable:  false,
-			},
-		},
 	}
+
+	if kernelBoot {
+		// Direct kernel boot: no root disk.
+		cfg.Kernel = kernelPath
+		cfg.Initrd = initrdPath
+		cfg.Cmdline = req.GetImage().GetCmdline()
+	} else {
+		rootPath, err := m.storage.VolumePath(pool, rootVol)
+		if err != nil {
+			return "", fmt.Errorf("root volume path: %w", err)
+		}
+		cfg.Disks = append(cfg.Disks, libvirt.DomainDisk{
+			Device:    "disk",
+			Type:      "file",
+			Source:    rootPath,
+			Driver:    "qcow2",
+			TargetDev: "vda",
+			Writable:  true,
+		})
+	}
+
+	cloudPath, err := m.storage.VolumePath(pool, cloudVol)
+	if err != nil {
+		return "", fmt.Errorf("cloud-init volume path: %w", err)
+	}
+	cfg.Disks = append(cfg.Disks, libvirt.DomainDisk{
+		Device:    "cdrom",
+		Type:      "file",
+		Source:    cloudPath,
+		Driver:    "raw",
+		TargetDev: "hda",
+		Writable:  false,
+	})
+
 	for _, ifc := range req.GetInterfaces() {
 		cfg.Interfaces = append(cfg.Interfaces, libvirt.DomainInterface{
 			Bridge:     ifc.GetBridge(),

@@ -17,12 +17,14 @@ func NewImageRepository(db DBTX) *ImageRepository {
 }
 
 const imageCols = `id, name, version, architecture, format, source_url, checksum, size_bytes,
-	cloud_init_compatible, status, created_at, updated_at`
+	cloud_init_compatible, kernel_url, initrd_url, cmdline, status, created_at, updated_at`
 
 func scanImage(row pgx.Row) (*models.Image, error) {
 	var i models.Image
 	err := row.Scan(&i.ID, &i.Name, &i.Version, &i.Architecture, &i.Format, &i.SourceURL,
-		&i.Checksum, &i.SizeBytes, &i.CloudInitCompatible, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+		&i.Checksum, &i.SizeBytes, &i.CloudInitCompatible,
+		&i.KernelURL, &i.InitrdURL, &i.Cmdline,
+		&i.Status, &i.CreatedAt, &i.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -31,11 +33,12 @@ func scanImage(row pgx.Row) (*models.Image, error) {
 
 func (r *ImageRepository) Create(ctx context.Context, img *models.Image) (*models.Image, error) {
 	row := r.db.QueryRow(ctx, `
-		INSERT INTO images (name, version, architecture, format, source_url, checksum, size_bytes, cloud_init_compatible)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO images (name, version, architecture, format, source_url, checksum, size_bytes, cloud_init_compatible, kernel_url, initrd_url, cmdline)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+imageCols,
 		img.Name, img.Version, img.Architecture, img.Format, img.SourceURL,
-		img.Checksum, img.SizeBytes, img.CloudInitCompatible)
+		img.Checksum, img.SizeBytes, img.CloudInitCompatible,
+		img.KernelURL, img.InitrdURL, img.Cmdline)
 	created, err := scanImage(row)
 	if err != nil {
 		if isUniqueViolation(err) {

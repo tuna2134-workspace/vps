@@ -162,10 +162,23 @@ func (c *Client) Heartbeat(ctx context.Context, req *agentv1.HeartbeatRequest, t
 	return c.service.Heartbeat(ctx, req)
 }
 
-func (c *Client) GetConsoleToken(ctx context.Context, req *agentv1.GetConsoleTokenRequest, timeout time.Duration) (*agentv1.GetConsoleTokenResponse, error) {
+// Console opens a bidirectional stream to a VM's console (serial or VNC). The
+// first frame carries the VM identity and console type. The returned stream is
+// the raw gRPC stream; callers typically wrap it to satisfy the
+// console.Stream interface.
+func (c *Client) Console(ctx context.Context, vmID, vmName, consoleType string, timeout time.Duration) (agentv1.AgentService_ConsoleClient, error) {
 	ctx, cancel := c.withTimeout(ctx, timeout)
-	defer cancel()
-	return c.service.GetConsoleToken(ctx, req)
+	stream, err := c.service.Console(ctx)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if err := stream.Send(&agentv1.ConsoleRequest{VmId: vmID, VmName: vmName, ConsoleType: consoleType}); err != nil {
+		cancel()
+		return nil, err
+	}
+	// The caller is responsible for canceling the context.
+	return stream, nil
 }
 
 // OpError converts an agent OperationResponse error into a Go error.

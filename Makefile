@@ -29,6 +29,21 @@ integration:
 e2e:
 	go test ./tests/e2e/...
 
+# Full provisioning flow against REAL libvirt/QEMU (requires sudo; creates a
+# real bridge under qemu:///system).
+e2e-sudo:
+	sudo -E env REAL_LIBVIRT=1 LIBVIRT_URI=qemu:///system go test ./tests/e2e/ -v
+
+# Real hypervisor tests (libvirt + QEMU). No database needed.
+# User session (no root):
+real:
+	REAL_LIBVIRT=1 LIBVIRT_URI=qemu:///session go test ./tests/real/ -v
+
+# System hypervisor (requires sudo; enables bridge networking and the
+# production qemu:///system setup):
+real-sudo:
+	sudo -E env REAL_LIBVIRT=1 LIBVIRT_URI=qemu:///system go test ./tests/real/ -v
+
 # Static analysis
 vet:
 	go vet ./...

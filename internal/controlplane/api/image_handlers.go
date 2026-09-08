@@ -16,6 +16,9 @@ type imageRequest struct {
 	Checksum            string `json:"checksum"`
 	SizeBytes           int64  `json:"size_bytes"`
 	CloudInitCompatible bool   `json:"cloud_init_compatible"`
+	KernelURL           string `json:"kernel_url"`
+	InitrdURL           string `json:"initrd_url"`
+	Cmdline             string `json:"cmdline"`
 }
 
 type ImageHandlers struct {
@@ -63,6 +66,9 @@ func (h *ImageHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		Checksum:            req.Checksum,
 		SizeBytes:           req.SizeBytes,
 		CloudInitCompatible: req.CloudInitCompatible,
+		KernelURL:           req.KernelURL,
+		InitrdURL:           req.InitrdURL,
+		Cmdline:             req.Cmdline,
 	})
 	if err != nil {
 		if err == images.ErrConflict {

@@ -1,7 +1,7 @@
 # VPS Hosting Platform
 
 A production-oriented, VirtFusion-style **VPS hosting backend** built in Go:
-Control Plane + per-node Agents, PostgreSQL, gRPC (mTLS), libvirt, iptables,
+Control Plane + per-node Agents, PostgreSQL, gRPC (mTLS), libvirt, nftables,
 cloud-init, and Stripe billing. **No UI** — the REST API and OpenAPI contract
 are the deliverables a future frontend implements against.
 
@@ -12,14 +12,14 @@ are the deliverables a future frontend implements against.
   operations, Stripe billing, console token issuance.
 - **Agent** — runs on each compute node; manages VMs through the official
   libvirt Go bindings, generates cloud-init NoCloud disks with `go-diskfs`,
-  and enforces IP/MAC anti-spoofing with `go-iptables` (chain-based and
+  and enforces IP/MAC anti-spoofing with `google/nftables` (chain-based and
   idempotent).
 
 The Control Plane never touches libvirt directly. All hypervisor work flows
 through gRPC:
 
 ```text
-Control Plane  --gRPC/mTLS-->  Agent  -->  libvirt / iptables / cloud-init
+Control Plane  --gRPC/mTLS-->  Agent  -->  libvirt / nftables / cloud-init
 ```
 
 ## Architecture & Docs
@@ -27,7 +27,7 @@ Control Plane  --gRPC/mTLS-->  Agent  -->  libvirt / iptables / cloud-init
 - [Architecture](docs/architecture.md)
 - [API guide](docs/api.md) and the full [OpenAPI 3.x spec](api/openapi/openapi.yaml)
 - [Provisioning flow](docs/provisioning.md)
-- [Networking / IPAM / iptables](docs/networking.md)
+- [Networking / IPAM / nftables](docs/networking.md)
 - [Billing](docs/billing.md)
 
 ## Prerequisites
@@ -35,7 +35,7 @@ Control Plane  --gRPC/mTLS-->  Agent  -->  libvirt / iptables / cloud-init
 - Go 1.27+
 - PostgreSQL 16 (or `docker compose up postgres`)
 - protoc + `protoc-gen-go` + `protoc-gen-go-grpc` (only to regenerate protos)
-- For real agents: libvirt (`qemu:///system`), `iptables`/`ip6tables`,
+- For real agents: libvirt (`qemu:///system`), `nftables`,
   `qemu-img`, and a configured bridge (e.g. `br-public`)
 
 ## Quick start (development)
@@ -50,8 +50,8 @@ cp .env.example .env
 # 3. Run the Control Plane (applies migrations on startup)
 go run ./cmd/control-plane
 
-# 4. Run an agent WITHOUT a hypervisor (fake mode) — or on a real host
-AGENT_FAKE_MODE=true AGENT_ID=agent-1 go run ./cmd/agent
+# 4. Run an agent on a hypervisor host with real libvirt
+LIBVIRT_URI=qemu:///system AGENT_ID=agent-1 go run ./cmd/agent
 ```
 
 The API is now on `http://localhost:8080`, the agent gRPC on `:9001`.
@@ -71,7 +71,7 @@ curl -s -X POST $API/v1/auth/register -H 'Content-Type: application/json' -d '{
 TOKEN=$(curl -s -X POST $API/v1/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"taro@example.com","password":"supersecret1"}' | jq -r .data.token)
 
-# create a cluster and register the fake agent (requires support/admin role)
+# create a cluster and register the agent (requires support/admin role)
 curl -s -X POST $API/v1/clusters -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"name":"dc1"}'
 # promote the user to admin for this walkthrough:
@@ -164,15 +164,49 @@ Run the agent on that host (not in Docker) with `LIBVIRT_URI=qemu:///system`.
 ```bash
 make unit           # unit tests (no DB)
 make integration    # integration tests (needs PostgreSQL; TEST_DATABASE_URL)
-make e2e            # full provisioning flow (real gRPC + fake libvirt)
+make e2e            # full provisioning flow (real gRPC + REAL libvirt/QEMU)
+make real           # REAL libvirt + QEMU (session, no root)
+make real-sudo      # REAL libvirt + QEMU (system, needs sudo)
 make vet
 make lint           # golangci-lint
 ```
 
-E2E (`tests/e2e`) walks the whole lifecycle: registration → login → session →
-plan/network/image → VM create → scheduler → gRPC agent → IP/MAC allocation →
-cloud-init ISO → domain define/start → stop → start → delete → IP release →
-MAC/iattr cleanup → idempotency.
+E2E (`tests/e2e`) walks the whole lifecycle against a REAL libvirt + QEMU
+hypervisor: registration → login → session → plan/network/image → VM create →
+scheduler → gRPC agent → IP/MAC allocation → cloud-init ISO → domain
+define/start (kernel boot) → serial console → stop → start → delete → IP
+release → cleanup → idempotency. The test database (`vps_e2e`) and migrations
+are created automatically on startup. It requires a live hypervisor:
+
+```bash
+# system hypervisor (run with sudo; creates a real bridge)
+sudo -E env REAL_LIBVIRT=1 LIBVIRT_URI=qemu:///system \
+  E2E_DATABASE_URL=postgres://postgres:postgres@localhost:5432/vps_e2e?sslmode=disable \
+  go test ./tests/e2e/ -v
+```
+
+### Real hypervisor tests (`tests/real`)
+
+These run the production libvirt Adapter against a live libvirt + QEMU: storage
+pools/volumes, domain boot, and the official `virDomainOpenConsole` (serial) /
+`virDomainOpenGraphicsFD` (VNC) console APIs. No database is needed.
+
+```bash
+# user session (no root)
+REAL_LIBVIRT=1 LIBVIRT_URI=qemu:///session go test ./tests/real/ -v
+
+# system hypervisor (run with sudo; uses the production qemu:///system)
+sudo -E env REAL_LIBVIRT=1 LIBVIRT_URI=qemu:///system go test ./tests/real/ -v
+```
+
+The test builds a minimal kernel+initramfs VM (host `/boot/vmlinuz-linux` plus
+a small static Go init that runs a serial shell) and verifies:
+
+- real libvirt connection + node info
+- storage pool creation, volume create/upload/resize (libvirt-go-xml rendered XML)
+- VM define/start with a real QEMU
+- serial console: boot banner + echo over `virDomainOpenConsole`
+- VNC: the `RFB 003.008` handshake over `virDomainOpenGraphicsFD`
 
 ## CI
 

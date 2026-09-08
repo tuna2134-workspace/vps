@@ -19,7 +19,7 @@ handling that prevents orphaned resources.
 11. Agent uploads image into volume, resizes to plan disk size
 12. Agent generates cloud-init ISO (user-data, meta-data, network-config)
 13. Agent uploads ISO as a CD-ROM volume
-14. Agent configures iptables IP/MAC binding (idempotent chains)
+14. Agent configures nftables IP/MAC binding (idempotent chains)
 15. Agent builds domain XML (official libvirt-go-xml) with bridge NIC
 16. Agent defines the domain
 17. Agent starts the domain
