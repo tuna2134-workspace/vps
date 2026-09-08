@@ -5,8 +5,9 @@ package libvirt
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"time"
+	"io"
 
 	libvirt "libvirt.org/go/libvirt"
 )
@@ -128,9 +129,9 @@ func (a *Adapter) Close() error {
 	if a.conn == nil {
 		return nil
 	}
-	_ = a.conn.Close()
+	_, err := a.conn.Close()
 	a.conn = nil
-	return nil
+	return err
 }
 
 // withConn runs fn with a connection, opening one lazily if needed.
@@ -376,9 +377,9 @@ func (a *Adapter) GetDomainInterfaces(name string) ([]InterfaceInfo, error) {
 			ii := InterfaceInfo{Name: ifc.Name, MACAddress: ifc.Hwaddr}
 			for _, a := range ifc.Addrs {
 				switch a.Type {
-				case libvirt.DOMAIN_IP_ADDR_TYPE_IPV4:
+				case libvirt.IP_ADDR_TYPE_IPV4:
 					ii.IPv4 = append(ii.IPv4, a.Addr)
-				case libvirt.DOMAIN_IP_ADDR_TYPE_IPV6:
+				case libvirt.IP_ADDR_TYPE_IPV6:
 					ii.IPv6 = append(ii.IPv6, a.Addr)
 				}
 			}
@@ -500,13 +501,21 @@ func (a *Adapter) UploadVolumeFile(pool, name, path string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		err = stream.SendAll(func(p []byte) (int, error) {
+		err = stream.SendAll(func(stream *libvirt.Stream, n int) ([]byte, error) {
 			select {
 			case <-ctx.Done():
-				return 0, ctx.Err()
+				return nil, ctx.Err()
 			default:
 			}
-			return f.Read(p)
+			buf := make([]byte, n)
+			nRead, err := f.Read(buf)
+			if err != nil && !errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			if nRead == 0 {
+				return nil, nil // EOF signals completion
+			}
+			return buf[:nRead], nil
 		})
 		if err != nil {
 			_ = stream.Abort()
@@ -609,5 +618,3 @@ func (a *Adapter) EnsurePoolActive(pool string) error {
 		return nil
 	})
 }
-
-var _ = time.Second
