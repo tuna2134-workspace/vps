@@ -106,6 +106,8 @@ type Manager interface {
 	GetNodeInfo() (*NodeInfo, error)
 	// EnsurePoolActive refreshes the storage pool so new volumes are visible.
 	EnsurePoolActive(pool string) error
+	// GetStoragePoolInfo returns capacity/availability for a pool.
+	GetStoragePoolInfo(pool string) (totalBytes, freeBytes int64, err error)
 }
 
 // Adapter is the real libvirt implementation.
@@ -625,6 +627,26 @@ func (a *Adapter) VolumePath(pool, name string) (string, error) {
 		return "", fmt.Errorf("volume %s has no path", name)
 	}
 	return vol.Path, nil
+}
+
+// GetStoragePoolInfo returns capacity and available bytes for a pool.
+func (a *Adapter) GetStoragePoolInfo(pool string) (int64, int64, error) {
+	var total, free int64
+	err := a.withConn(func(c *libvirt.Connect) error {
+		p, err := c.LookupStoragePoolByName(pool)
+		if err != nil {
+			return fmt.Errorf("lookup pool %s: %w", pool, err)
+		}
+		defer p.Free()
+		info, err := p.GetInfo()
+		if err != nil {
+			return fmt.Errorf("get pool info %s: %w", pool, err)
+		}
+		total = int64(info.Capacity)
+		free = int64(info.Available)
+		return nil
+	})
+	return total, free, err
 }
 
 // EnsurePoolActive refreshes the pool so volumes created externally are seen.

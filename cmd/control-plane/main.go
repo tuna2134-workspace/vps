@@ -25,6 +25,7 @@ import (
 	consolegateway "github.com/tuna2134/vps/internal/controlplane/console/gateway"
 	"github.com/tuna2134/vps/internal/controlplane/database"
 	"github.com/tuna2134/vps/internal/controlplane/grpcclient"
+	"github.com/tuna2134/vps/internal/controlplane/images"
 	"github.com/tuna2134/vps/internal/controlplane/macalloc"
 	"github.com/tuna2134/vps/internal/controlplane/models"
 	"github.com/tuna2134/vps/internal/controlplane/networks"
@@ -98,6 +99,7 @@ func run(log *slog.Logger) error {
 
 	clusterSvc := cluster.NewService(repos.Clusters, repos.Nodes, repos.StoragePools, auditSvc, cfg.NodeDegradedAfter, cfg.NodeOfflineAfter)
 	planSvc := plans.NewService(repos.Plans, auditSvc)
+	imageSvc := images.NewService(repos.Images, auditSvc)
 	networkSvc := networks.NewService(repos.Networks, repos.IPPools, auditSvc)
 
 	// --- Agent connections ---
@@ -157,6 +159,7 @@ func run(log *slog.Logger) error {
 		Plans:      planSvc,
 		Networks:   networkSvc,
 		Clusters:   clusterSvc,
+		Images:     imageSvc,
 		Billing:    billingSvc,
 		Console:    consoleSvc,
 		ConsoleWS:  wsGateway.HandleWS,

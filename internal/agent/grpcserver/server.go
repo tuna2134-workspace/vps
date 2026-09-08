@@ -31,13 +31,17 @@ type Server struct {
 
 // New builds the agent gRPC server.
 func New(mgr *manager.Manager, lv libvirt.Manager, metricsProvider *metrics.Provider, log *slog.Logger, fake bool) *Server {
-	return &Server{
+	s := &Server{
 		manager:  mgr,
 		libvirt:  lv,
 		metrics:  metricsProvider,
 		log:      log,
 		FakeMode: fake,
 	}
+	if mgr != nil {
+		s.metrics.SetStoragePool(mgr.DefaultPool())
+	}
+	return s
 }
 
 func okResponse() *agentv1.OperationResponse {

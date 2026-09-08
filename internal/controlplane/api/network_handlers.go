@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
 	"github.com/tuna2134/vps/internal/controlplane/networks"
@@ -80,7 +81,7 @@ func (h *NetworkHandlers) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NetworkHandlers) AddPool(w http.ResponseWriter, r *http.Request) {
-	networkID := pathSegment(r, "/v1/networks/")
+	networkID := strings.TrimSuffix(pathSegment(r, "/v1/networks/"), "/pools")
 	var req poolRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
@@ -108,7 +109,7 @@ func (h *NetworkHandlers) AddPool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NetworkHandlers) ListPools(w http.ResponseWriter, r *http.Request) {
-	networkID := pathSegment(r, "/v1/networks/")
+	networkID := strings.TrimSuffix(pathSegment(r, "/v1/networks/"), "/pools")
 	pools, err := h.networks.ListPools(r.Context(), networkID)
 	if err != nil {
 		mapError(w, err)

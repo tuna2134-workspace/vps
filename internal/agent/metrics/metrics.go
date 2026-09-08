@@ -2,7 +2,6 @@
 package metrics
 
 import (
-	"fmt"
 	"os"
 	"runtime"
 	"time"
@@ -27,11 +26,17 @@ type Snapshot struct {
 
 // Provider samples node metrics.
 type Provider struct {
-	manager libvirt.Manager
+	manager     libvirt.Manager
+	storagePool string
 }
 
 func NewProvider(manager libvirt.Manager) *Provider {
 	return &Provider{manager: manager}
+}
+
+// SetStoragePool sets the default pool used for storage reporting.
+func (p *Provider) SetStoragePool(pool string) {
+	p.storagePool = pool
 }
 
 // Sample returns the current node metrics.
@@ -60,6 +65,15 @@ func (p *Provider) Sample() (*Snapshot, error) {
 			}
 			if ni.MemoryBytes > 0 {
 				s.MemoryTotalBytes = int64(ni.MemoryBytes)
+				if s.MemoryFreeBytes <= 0 || s.MemoryFreeBytes > s.MemoryTotalBytes {
+					s.MemoryFreeBytes = s.MemoryTotalBytes
+				}
+			}
+		}
+		if p.storagePool != "" {
+			if total, free, err := p.manager.GetStoragePoolInfo(p.storagePool); err == nil {
+				s.StorageTotalBytes = total
+				s.StorageFreeBytes = free
 			}
 		}
 	}
@@ -72,13 +86,8 @@ func (p *Provider) StorageSnapshot(poolName string) (total, free int64, err erro
 	if p.manager == nil {
 		return 0, 0, nil
 	}
-	// Fall back to local filesystem stats for the pool path if libvirt cannot
-	// provide it directly.
-	info, err := p.manager.GetNodeInfo()
-	if err != nil {
-		return 0, 0, fmt.Errorf("get node info: %w", err)
+	if poolName == "" {
+		poolName = p.storagePool
 	}
-	_ = info
-	_ = poolName
-	return 0, 0, nil
+	return p.manager.GetStoragePoolInfo(poolName)
 }

@@ -57,6 +57,11 @@ func New(
 	}
 }
 
+// DefaultPool returns the agent's configured default storage pool.
+func (m *Manager) DefaultPool() string {
+	return m.defaultPool
+}
+
 // CreateVM runs the full provisioning flow for a VM.
 func (m *Manager) CreateVM(ctx context.Context, req *agentv1.CreateVMRequest) error {
 	pool := req.GetStoragePool()

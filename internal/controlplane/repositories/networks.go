@@ -103,9 +103,9 @@ func NewIPPoolRepository(db DBTX) *IPPoolRepository {
 
 func (r *IPPoolRepository) CreatePool(ctx context.Context, pool *models.IPPool) (*models.IPPool, error) {
 	row := r.db.QueryRow(ctx, `
-		INSERT INTO ip_pools (network_id, cidr, type, gateway)
+		INSERT INTO ip_pools (network_id, cidr, "type", gateway)
 		VALUES ($1, $2, $3, $4)
-		RETURNING id, network_id, cidr, type, gateway`,
+		RETURNING id, network_id, cidr, "type", gateway`,
 		pool.NetworkID, pool.CIDR, pool.Type, pool.Gateway)
 	var out models.IPPool
 	if err := row.Scan(&out.ID, &out.NetworkID, &out.CIDR, &out.Type, &out.Gateway); err != nil {
@@ -119,7 +119,7 @@ func (r *IPPoolRepository) CreatePool(ctx context.Context, pool *models.IPPool) 
 
 func (r *IPPoolRepository) ListPoolsByNetwork(ctx context.Context, networkID string) ([]models.IPPool, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, network_id, cidr, type, gateway FROM ip_pools WHERE network_id = $1`, networkID)
+		SELECT id, network_id, cidr, "type", gateway FROM ip_pools WHERE network_id = $1`, networkID)
 	if err != nil {
 		return nil, fmt.Errorf("list ip pools: %w", err)
 	}
@@ -137,7 +137,7 @@ func (r *IPPoolRepository) ListPoolsByNetwork(ctx context.Context, networkID str
 
 func (r *IPPoolRepository) GetPoolByID(ctx context.Context, poolID string) (*models.IPPool, error) {
 	row := r.db.QueryRow(ctx, `
-		SELECT id, network_id, cidr, type, gateway FROM ip_pools WHERE id = $1`, poolID)
+		SELECT id, network_id, cidr, "type", gateway FROM ip_pools WHERE id = $1`, poolID)
 	var p models.IPPool
 	if err := row.Scan(&p.ID, &p.NetworkID, &p.CIDR, &p.Type, &p.Gateway); err != nil {
 		if isNoRowsOrInvalidUUID(err) {

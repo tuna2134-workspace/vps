@@ -1,5 +1,6 @@
 // Package cloudinit generates cloud-init NoCloud seed disks (ISO9660)
-// containing user-data, meta-data, and network-config.
+// containing user-data, meta-data, and network-config. All YAML documents are
+// written and read through gopkg.in/yaml.v3 so escaping is handled correctly.
 package cloudinit
 
 import (
@@ -12,6 +13,7 @@ import (
 	"github.com/diskfs/go-diskfs/disk"
 	"github.com/diskfs/go-diskfs/filesystem"
 	"github.com/diskfs/go-diskfs/filesystem/iso9660"
+	"gopkg.in/yaml.v3"
 )
 
 // InstanceMetadata is the NoCloud meta-data payload.
@@ -42,7 +44,7 @@ type Config struct {
 }
 
 // Generate writes a cloud-init NoCloud ISO to path.
-// The ISO contains user-data, meta-data, and network-config (Netplan v2).
+// The ISO contains user-data, meta-data, and network-config.
 func Generate(path string, cfg Config, workDir string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create iso directory: %w", err)
@@ -143,76 +145,182 @@ func writeFile(fs filesystem.FileSystem, name, content string) error {
 	return nil
 }
 
+// --- YAML document types ---
+
+// metaData is the NoCloud meta-data document.
+type metaData struct {
+	InstanceID    string `yaml:"instance-id"`
+	LocalHostname string `yaml:"local-hostname"`
+}
+
+// userData is the cloud-init user-data document.
+type userData struct {
+	Hostname          string   `yaml:"hostname,omitempty"`
+	User              string   `yaml:"user,omitempty"`
+	Password          string   `yaml:"password,omitempty"`
+	SSHPAuth          *bool    `yaml:"ssh_pwauth,omitempty"`
+	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys,omitempty"`
+}
+
+// networkConfigV2 is Network Config Version 2 (netplan).
+type networkConfigV2 struct {
+	Version   int              `yaml:"version"`
+	Ethernets map[string]ether `yaml:"ethernets"`
+}
+
+type ether struct {
+	Addresses   []string     `yaml:"addresses,omitempty"`
+	DHCP4       *bool        `yaml:"dhcp4,omitempty"`
+	Routes      []route      `yaml:"routes,omitempty"`
+	Nameservers *nameservers `yaml:"nameservers,omitempty"`
+}
+
+type route struct {
+	To  string `yaml:"to"`
+	Via string `yaml:"via"`
+}
+
+type nameservers struct {
+	Addresses []string `yaml:"addresses,omitempty"`
+}
+
+// --- Rendering (write path) ---
+
 func renderMetaData(cfg Config) string {
-	var b bytes.Buffer
-	b.WriteString("#cloud-config\n")
-	fmt.Fprintf(&b, "instance-id: %s\n", cfg.Metadata.InstanceID)
-	fmt.Fprintf(&b, "local-hostname: %s\n", cfg.Metadata.Hostname)
-	return b.String()
+	doc := metaData{
+		InstanceID:    cfg.Metadata.InstanceID,
+		LocalHostname: cfg.Metadata.Hostname,
+	}
+	return yamlString(doc)
 }
 
 func renderUserData(cfg Config) string {
-	var b bytes.Buffer
-	b.WriteString("#cloud-config\n")
-	fmt.Fprintf(&b, "hostname: %s\n", cfg.Metadata.Hostname)
+	doc := userData{
+		Hostname: cfg.Metadata.Hostname,
+	}
 	if cfg.User != "" {
-		fmt.Fprintf(&b, "user: %s\n", cfg.User)
+		doc.User = cfg.User
 	}
 	if cfg.Password != "" {
-		// Password is written in cleartext per cloud-init semantics.
-		fmt.Fprintf(&b, "password: %s\n", cfg.Password)
-		fmt.Fprintf(&b, "ssh_pwauth: true\n")
+		doc.Password = cfg.Password
+		trueVal := true
+		doc.SSHPAuth = &trueVal
 	}
 	if len(cfg.SSHKeys) > 0 {
-		b.WriteString("ssh_authorized_keys:\n")
-		for _, k := range cfg.SSHKeys {
-			fmt.Fprintf(&b, "  - %s\n", k)
-		}
+		doc.SSHAuthorizedKeys = cfg.SSHKeys
 	}
+	body := yamlString(doc)
 	if cfg.ExtraUserData != "" {
-		b.WriteString(cfg.ExtraUserData)
-		if cfg.ExtraUserData[len(cfg.ExtraUserData)-1] != '\n' {
-			b.WriteString("\n")
+		body += cfg.ExtraUserData
+		if body[len(body)-1] != '\n' {
+			body += "\n"
 		}
 	}
-	return b.String()
+	// cloud-init requires the module header as the first line.
+	return "#cloud-config\n" + body
 }
 
 // renderNetworkConfig emits Network Config Version 2.
 func renderNetworkConfig(cfg Config) string {
-	var b bytes.Buffer
-	b.WriteString("version: 2\n")
-	b.WriteString("ethernets:\n")
+	doc := networkConfigV2{Version: 2, Ethernets: map[string]ether{}}
 	for _, n := range cfg.Networks {
 		name := fmt.Sprintf("eth%d", n.InterfaceIndex)
-		fmt.Fprintf(&b, "  %s:\n", name)
+		e := ether{}
+		dhcp := false
 		if len(n.IPv4Addresses) == 0 && len(n.IPv6Addresses) == 0 {
-			fmt.Fprintf(&b, "    dhcp4: true\n")
-			continue
-		}
-		fmt.Fprintf(&b, "    addresses:\n")
-		for _, a := range n.IPv4Addresses {
-			fmt.Fprintf(&b, "      - %s\n", a)
-		}
-		for _, a := range n.IPv6Addresses {
-			fmt.Fprintf(&b, "      - %s\n", a)
-		}
-		if n.IPv4Gateway != "" || n.IPv6Gateway != "" {
-			fmt.Fprintf(&b, "    routes:\n")
+			dhcp = true
+			e.DHCP4 = &dhcp
+		} else {
+			e.Addresses = append(e.Addresses, n.IPv4Addresses...)
+			e.Addresses = append(e.Addresses, n.IPv6Addresses...)
 			if n.IPv4Gateway != "" {
-				fmt.Fprintf(&b, "      - to: default\n        via: %s\n", n.IPv4Gateway)
+				e.Routes = append(e.Routes, route{To: "default", Via: n.IPv4Gateway})
 			}
 			if n.IPv6Gateway != "" {
-				fmt.Fprintf(&b, "      - to: default\n        via: %s\n", n.IPv6Gateway)
+				e.Routes = append(e.Routes, route{To: "default", Via: n.IPv6Gateway})
 			}
 		}
 		if len(n.DNSServers) > 0 {
-			fmt.Fprintf(&b, "    nameservers:\n")
-			fmt.Fprintf(&b, "      addresses:\n")
-			for _, d := range n.DNSServers {
-				fmt.Fprintf(&b, "        - %s\n", d)
-			}
+			e.Nameservers = &nameservers{Addresses: n.DNSServers}
 		}
+		doc.Ethernets[name] = e
 	}
-	return b.String()
+	return yamlString(doc)
+}
+
+func yamlString(v any) string {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(v); err != nil {
+		// Marshal cannot fail for these plain structs; fall back defensively.
+		return ""
+	}
+	_ = enc.Close()
+	return buf.String()
+}
+
+// --- Parsing (read path) ---
+
+// ParsedMetaData is the decoded form of a NoCloud meta-data document.
+type ParsedMetaData struct {
+	InstanceID    string `yaml:"instance-id"`
+	LocalHostname string `yaml:"local-hostname"`
+}
+
+// ParsedUserData is the decoded form of a cloud-config user-data document.
+type ParsedUserData struct {
+	Hostname          string   `yaml:"hostname"`
+	User              string   `yaml:"user"`
+	Password          string   `yaml:"password"`
+	SSHPAuth          bool     `yaml:"ssh_pwauth"`
+	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys"`
+}
+
+// ParsedNetworkConfig is the decoded form of a Network Config Version 2
+// document.
+type ParsedNetworkConfig struct {
+	Version   int                       `yaml:"version"`
+	Ethernets map[string]ParsedEthernet `yaml:"ethernets"`
+}
+
+// ParsedEthernet is a single interface in a parsed network config.
+type ParsedEthernet struct {
+	Addresses []string `yaml:"addresses"`
+	DHCP4     bool     `yaml:"dhcp4"`
+	Routes    []struct {
+		To  string `yaml:"to"`
+		Via string `yaml:"via"`
+	} `yaml:"routes"`
+	Nameservers struct {
+		Addresses []string `yaml:"addresses"`
+	} `yaml:"nameservers"`
+}
+
+// ParseMetaData decodes a NoCloud meta-data document.
+func ParseMetaData(data []byte) (*ParsedMetaData, error) {
+	var d ParsedMetaData
+	if err := yaml.Unmarshal(data, &d); err != nil {
+		return nil, fmt.Errorf("parse meta-data yaml: %w", err)
+	}
+	return &d, nil
+}
+
+// ParseUserData decodes a cloud-config user-data document. A leading
+// "#cloud-config" header line is accepted.
+func ParseUserData(data []byte) (*ParsedUserData, error) {
+	var d ParsedUserData
+	if err := yaml.Unmarshal(data, &d); err != nil {
+		return nil, fmt.Errorf("parse user-data yaml: %w", err)
+	}
+	return &d, nil
+}
+
+// ParseNetworkConfig decodes a Network Config Version 2 document.
+func ParseNetworkConfig(data []byte) (*ParsedNetworkConfig, error) {
+	var d ParsedNetworkConfig
+	if err := yaml.Unmarshal(data, &d); err != nil {
+		return nil, fmt.Errorf("parse network-config yaml: %w", err)
+	}
+	return &d, nil
 }

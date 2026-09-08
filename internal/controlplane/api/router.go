@@ -12,6 +12,7 @@ import (
 	"github.com/tuna2134/vps/internal/controlplane/billing"
 	"github.com/tuna2134/vps/internal/controlplane/cluster"
 	"github.com/tuna2134/vps/internal/controlplane/console"
+	"github.com/tuna2134/vps/internal/controlplane/images"
 	"github.com/tuna2134/vps/internal/controlplane/models"
 	"github.com/tuna2134/vps/internal/controlplane/networks"
 	"github.com/tuna2134/vps/internal/controlplane/plans"
@@ -26,6 +27,7 @@ type Dependencies struct {
 	Plans      *plans.Service
 	Networks   *networks.Service
 	Clusters   *cluster.Service
+	Images     *images.Service
 	Billing    *billing.Service
 	Console    *console.Service
 	ConsoleWS  http.HandlerFunc
@@ -47,6 +49,7 @@ func NewRouter(deps Dependencies, log *slog.Logger) http.Handler {
 	planHandlers := NewPlanHandlers(deps.Plans)
 	networkHandlers := NewNetworkHandlers(deps.Networks)
 	clusterHandlers := NewClusterHandlers(deps.Clusters)
+	imageHandlers := NewImageHandlers(deps.Images)
 	billingHandlers := NewBillingHandlers(deps.Billing)
 	consoleHandlers := NewConsoleHandlers(deps.Console, deps.VMs)
 	health := &Health{Ready: deps.ReadyCheck}
@@ -99,6 +102,9 @@ func NewRouter(deps Dependencies, log *slog.Logger) http.Handler {
 		priv.Get("/v1/billing/invoices", billingHandlers.ListInvoices)
 		priv.Post("/v1/billing/subscription", billingHandlers.CreateSubscription)
 
+		priv.Get("/v1/images", imageHandlers.List)
+		priv.Get("/v1/images/{id}", imageHandlers.Get)
+
 		priv.Get("/v1/networks", networkHandlers.List)
 		priv.Get("/v1/networks/{id}", networkHandlers.Get)
 		priv.Get("/v1/networks/{id}/pools", networkHandlers.ListPools)
@@ -108,6 +114,8 @@ func NewRouter(deps Dependencies, log *slog.Logger) http.Handler {
 	r.Group(func(admin chi.Router) {
 		admin.Use(authMW.Authenticate)
 		admin.Use(RequireRole(models.RoleSupport))
+
+		admin.Post("/v1/images", imageHandlers.Create)
 
 		admin.Post("/v1/networks", networkHandlers.Create)
 		admin.Post("/v1/networks/{id}/pools", networkHandlers.AddPool)

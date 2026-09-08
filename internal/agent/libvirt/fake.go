@@ -244,6 +244,10 @@ func (f *FakeManager) GetNodeInfo() (*NodeInfo, error) {
 	return &NodeInfo{CPUs: f.nodeInfo.CPUs, MemoryBytes: f.nodeInfo.MemoryBytes, Hostname: f.nodeInfo.Hostname}, nil
 }
 
+func (f *FakeManager) GetStoragePoolInfo(pool string) (int64, int64, error) {
+	return 2 << 40, 2 << 40, nil // 2 TiB total and free
+}
+
 // VolumeDataFile returns the uploaded data file for a volume (test helper).
 func (f *FakeManager) VolumeDataFile(pool, name string) string {
 	f.mu.Lock()
