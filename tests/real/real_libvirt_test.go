@@ -131,6 +131,16 @@ func TestRealLibvirt(t *testing.T) {
 		Cmdline:     "console=ttyS0,115200n8",
 		VNCPassword: "test",
 		Emulator:    qemu,
+		// The cloud-init seed volume attached as a SATA cdrom, mirroring the
+		// manager's disk layout (validates libvirt accepts the sata cdrom).
+		Disks: []agentlibvirt.DomainDisk{{
+			Device:    "cdrom",
+			Type:      "file",
+			Source:    vi.Path,
+			Driver:    "raw",
+			TargetDev: "sda",
+			Writable:  false,
+		}},
 	})
 	if err != nil {
 		t.Fatalf("generate domain xml: %v", err)

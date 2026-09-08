@@ -396,7 +396,7 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 	}
 
 	// 8c. Serial console over the REAL VM via the streaming Console RPC.
-	serialTok, serialRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vm.Name, te.agentAddr, console.TypeSerial)
+	serialTok, serialRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vms.DomainName(vm), te.agentAddr, console.TypeSerial)
 	if err != nil {
 		t.Fatalf("issue serial console: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestEndToEndProvisioningFlow(t *testing.T) {
 	}
 
 	// 8d. VNC token issues (OpenGraphicsFD verified in tests/real).
-	vncTok, vncRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vm.Name, te.agentAddr, console.TypeVNC)
+	vncTok, vncRaw, err := te.consoleSvc.Issue(ctx, user.ID, vm.ID, vms.DomainName(vm), te.agentAddr, console.TypeVNC)
 	if err != nil {
 		t.Fatalf("issue vnc console: %v", err)
 	}

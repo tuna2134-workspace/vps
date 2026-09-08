@@ -66,7 +66,9 @@ func (h *ConsoleHandlers) IssueVMConsole(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tok, rawToken, err := h.console.Issue(r.Context(), u.ID, vm.ID, vm.Name, nodeEndpoint, consoleType)
+	// The console token must carry the libvirt DOMAIN name (vps-<instance-id>),
+	// not the VM's display name, so the agent can open the right domain.
+	tok, rawToken, err := h.console.Issue(r.Context(), u.ID, vm.ID, vms.DomainName(vm), nodeEndpoint, consoleType)
 	if err != nil {
 		mapError(w, err)
 		return

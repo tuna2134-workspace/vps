@@ -308,3 +308,9 @@ func (p *Provisioner) rebootVM(ctx context.Context, op *models.VMOperation) erro
 func domainName(vm *models.VM) string {
 	return "vps-" + vm.InstanceID
 }
+
+// DomainName is the exported domain name helper (used by the console handler
+// so the console token carries the real libvirt domain name).
+func DomainName(vm *models.VM) string {
+	return domainName(vm)
+}

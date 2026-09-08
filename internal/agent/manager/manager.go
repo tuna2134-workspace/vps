@@ -274,7 +274,7 @@ func (m *Manager) buildDomainXML(req *agentv1.CreateVMRequest, pool, rootVol, cl
 		Type:      "file",
 		Source:    cloudPath,
 		Driver:    "raw",
-		TargetDev: "hda",
+		TargetDev: "sda",
 		Writable:  false,
 	})
 

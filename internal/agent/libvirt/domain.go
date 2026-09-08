@@ -43,6 +43,15 @@ type DomainInterface struct {
 	Model      string
 }
 
+// diskBus returns the target bus for a disk device. Ejectable media
+// (cdrom) must be attached to a bus that supports it (SATA), not virtio.
+func diskBus(device string) string {
+	if device == "cdrom" {
+		return "sata"
+	}
+	return "virtio"
+}
+
 // GenerateDomainXML renders a libvirt domain XML document using the official
 // libvirt-go-xml bindings (libvirt.org/go/libvirtxml).
 func GenerateDomainXML(cfg DomainConfig) (string, error) {
@@ -109,7 +118,7 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 			},
 			Target: &libvirtxml.DomainDiskTarget{
 				Dev: d.TargetDev,
-				Bus: "virtio",
+				Bus: diskBus(d.Device),
 			},
 		}
 		if !d.Writable {

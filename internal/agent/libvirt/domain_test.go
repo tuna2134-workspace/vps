@@ -58,6 +58,10 @@ func TestGenerateDomainXML(t *testing.T) {
 	if cidata.Device != "cdrom" || cidata.ReadOnly == nil {
 		t.Errorf("cdrom should be read-only: %+v", cidata)
 	}
+	// Ejectable media must be on a SATA bus, not virtio.
+	if cidata.Target == nil || cidata.Target.Bus != "sata" {
+		t.Errorf("cdrom must be on the sata bus: %+v", cidata.Target)
+	}
 
 	if len(d.Devices.Interfaces) != 1 {
 		t.Fatalf("expected 1 interface")
