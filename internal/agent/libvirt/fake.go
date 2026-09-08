@@ -263,6 +263,14 @@ func (f *FakeManager) HasDomain(name string) bool {
 	return ok
 }
 
+// HasVolume reports whether a volume exists (test helper).
+func (f *FakeManager) HasVolume(pool, name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.volumes[pool+"/"+name]
+	return ok
+}
+
 func extractDomainName(xmlDoc string) (string, error) {
 	var d struct {
 		Name string `xml:"name"`

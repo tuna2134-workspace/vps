@@ -167,7 +167,9 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signatureHe
 	if s.webhookSecret == "" {
 		return false, ErrNotConfigured
 	}
-	event, err := webhook.ConstructEvent(payload, signatureHeader, s.webhookSecret)
+	event, err := webhook.ConstructEventWithOptions(payload, signatureHeader, s.webhookSecret, webhook.ConstructEventOptions{
+		IgnoreAPIVersionMismatch: true,
+	})
 	if err != nil {
 		return false, fmt.Errorf("invalid stripe webhook signature: %w", err)
 	}

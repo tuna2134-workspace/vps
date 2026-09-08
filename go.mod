@@ -16,6 +16,7 @@ require (
 	google.golang.org/grpc v1.82.2
 	google.golang.org/protobuf v1.36.12
 	libvirt.org/go/libvirt v1.12007.0
+	libvirt.org/go/libvirtxml v1.12007.0
 )
 
 require (

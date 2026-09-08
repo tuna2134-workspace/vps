@@ -1,0 +1,431 @@
+// Package e2e exercises the full provisioning flow against real PostgreSQL
+// and a real gRPC agent running in fake mode (no hypervisor). Cloud-init disk
+// generation, libvirt domain XML, IPAM, and operation lifecycle are all real.
+package e2e
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+
+	"github.com/tuna2134/vps/internal/agent/grpcserver"
+	"github.com/tuna2134/vps/internal/agent/image"
+	agentlibvirt "github.com/tuna2134/vps/internal/agent/libvirt"
+	"github.com/tuna2134/vps/internal/agent/manager"
+	"github.com/tuna2134/vps/internal/agent/metrics"
+	"github.com/tuna2134/vps/internal/agent/storage"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/tuna2134/vps/internal/controlplane/agents"
+	"github.com/tuna2134/vps/internal/controlplane/audit"
+	"github.com/tuna2134/vps/internal/controlplane/auth"
+	"github.com/tuna2134/vps/internal/controlplane/billing"
+	"github.com/tuna2134/vps/internal/controlplane/cluster"
+	"github.com/tuna2134/vps/internal/controlplane/database"
+	"github.com/tuna2134/vps/internal/controlplane/grpcclient"
+	"github.com/tuna2134/vps/internal/controlplane/macalloc"
+	"github.com/tuna2134/vps/internal/controlplane/models"
+	"github.com/tuna2134/vps/internal/controlplane/networks"
+	"github.com/tuna2134/vps/internal/controlplane/plans"
+	"github.com/tuna2134/vps/internal/controlplane/repositories"
+	"github.com/tuna2134/vps/internal/controlplane/scheduler"
+	"github.com/tuna2134/vps/internal/controlplane/users"
+	"github.com/tuna2134/vps/internal/controlplane/vms"
+	"github.com/tuna2134/vps/migrations"
+
+	agentv1 "github.com/tuna2134/vps/proto/gen/agent/v1"
+)
+
+const defaultDSN = "postgres://postgres:postgres@localhost:5432/vps_e2e?sslmode=disable"
+
+var (
+	pool *repositories.Repositories
+	dsn  string
+	log  *slog.Logger
+)
+
+func TestMain(m *testing.M) {
+	dsn = os.Getenv("E2E_DATABASE_URL")
+	if dsn == "" {
+		dsn = defaultDSN
+	}
+	log = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if err := migrations.WaitForDB(ctx, dsn, log, time.Second); err != nil {
+		panic(err)
+	}
+	runner, err := migrations.New(ctx, dsn, log)
+	if err != nil {
+		panic(err)
+	}
+	if err := runner.Up(ctx); err != nil {
+		panic(err)
+	}
+	runner.Close()
+
+	db, err := database.NewPool(ctx, dsn)
+	if err != nil {
+		panic(err)
+	}
+	pool = repositories.New(db)
+
+	// Reset all data so each run is deterministic.
+	if err := cleanTables(ctx, db); err != nil {
+		panic(err)
+	}
+
+	code := m.Run()
+	db.Close()
+	os.Exit(code)
+}
+
+// cleanTables truncates all application tables for a clean e2e run.
+func cleanTables(ctx context.Context, db *pgxpool.Pool) error {
+	_, err := db.Exec(ctx, `
+		TRUNCATE TABLE audit_logs, console_tokens, webhook_events, payments, invoices,
+			subscriptions, billing_customers, vm_operations, ip_allocations, vms, images,
+			ip_pools, networks, plan_versions, plans, storage_pools, nodes, clusters,
+			sessions, login_attempts, user_profiles, user_roles, users
+		RESTART IDENTITY CASCADE`)
+	return err
+}
+
+// e2eTest wires the control-plane services and a fake-mode agent together.
+type e2eTest struct {
+	userSvc     *users.Service
+	vmSvc       *vms.Service
+	clusterSvc  *cluster.Service
+	planSvc     *plans.Service
+	netSvc      *networks.Service
+	billingSvc  *billing.Service
+	agentServer *grpcserver.Server
+	agentFake   *agentlibvirt.FakeManager
+	factory     *agents.Factory
+	agentAddr   string
+	provisioner *vms.Provisioner
+}
+
+func setupE2E(t *testing.T) *e2eTest {
+	t.Helper()
+	ctx := context.Background()
+	auditSvc := audit.NewService(pool.Audit)
+
+	userSvc := users.NewService(pool.Users, pool.UserProfiles, pool.Sessions, pool.LoginAttempts, auditSvc, users.Options{
+		SessionTTL: time.Hour, SessionTokenLen: 32, Argon2: auth.DefaultParams,
+		LoginMaxAttempts: 5, LoginLockWindow: 15 * time.Minute,
+	})
+
+	clusterSvc := cluster.NewService(pool.Clusters, pool.Nodes, pool.StoragePools, auditSvc, 30*time.Second, 60*time.Second)
+	planSvc := plans.NewService(pool.Plans, auditSvc)
+	netSvc := networks.NewService(pool.Networks, pool.IPPools, auditSvc)
+
+	// Fake-mode agent on a random port. FakeMode is false so the real manager
+	// flow runs (image fetch, cloud-init generation, domain XML, define/start)
+	// against an in-memory libvirt.
+	fake := agentlibvirt.NewFakeManager()
+	store := storage.New(fake)
+	workDir := t.TempDir()
+	mgr := manager.New(fake, store, nil, image.New(workDir), workDir, "default", log)
+	metricsProvider := metrics.NewProvider(fake)
+	agentServer := grpcserver.New(mgr, fake, metricsProvider, log, false)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("agent listen: %v", err)
+	}
+	grpcSrv := grpc.NewServer()
+	agentv1.RegisterAgentServiceServer(grpcSrv, agentServer)
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- grpcSrv.Serve(lis)
+	}()
+	t.Cleanup(func() {
+		grpcSrv.Stop()
+		select {
+		case err := <-serveErr:
+			if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				t.Logf("grpc server error: %v", err)
+			}
+		default:
+		}
+	})
+	// Wait for the server to actually accept connections.
+	waitForServer(t, lis.Addr().String())
+
+	factory := agents.NewFactory(grpcclient.Options{Timeout: 5 * time.Second})
+
+	catalog := vms.NewCatalog(pool.VMs, pool.Nodes, pool.Images, netSvc, pool.Networks, pool.IPPools)
+	provisioner := vms.NewProvisioner(pool.Operations, pool.VMs, catalog, agents.AgentFactoryFunc(factory), 10*time.Second, log)
+	provisioner.Start(2)
+
+	sched := scheduler.New(pool.Nodes, pool.VMs)
+	macGen := macalloc.NewGenerator(pool.VMs)
+	billingSvc := billing.NewService("", "", pool.Billing, auditSvc, log)
+
+	vmSvc := vms.NewService(pool.VMs, pool.Operations, pool.Nodes, pool.Plans, netSvc, sched, macGen, auditSvc, provisioner, func(ctx context.Context, userID string) (bool, error) {
+		return true, nil
+	})
+
+	// Create a cluster and register this fake agent as a node.
+	cluster, err := clusterSvc.CreateCluster(ctx, "e2e-cluster-"+suffix(), "e2e")
+	if err != nil {
+		t.Fatalf("create cluster: %v", err)
+	}
+	node, err := clusterSvc.RegisterNode(ctx, cluster.ID, "agent-"+suffix(), lis.Addr().String())
+	if err != nil {
+		t.Fatalf("register node: %v", err)
+	}
+	// Mark the node healthy so the scheduler picks it.
+	if err := pool.Nodes.UpdateHeartbeat(ctx, node.ID, 16, 32768, 200, 10, 10); err != nil {
+		t.Fatalf("update heartbeat: %v", err)
+	}
+
+	return &e2eTest{
+		userSvc: userSvc, vmSvc: vmSvc, clusterSvc: clusterSvc, planSvc: planSvc,
+		netSvc: netSvc, billingSvc: billingSvc, agentServer: agentServer,
+		agentFake: fake, factory: factory, agentAddr: lis.Addr().String(),
+		provisioner: provisioner,
+	}
+}
+
+func TestEndToEndProvisioningFlow(t *testing.T) {
+	ctx := context.Background()
+	te := setupE2E(t)
+
+	// 1. User registration.
+	email := fmt.Sprintf("e2e-%d@example.com", time.Now().UnixNano())
+	user, err := te.userSvc.Register(ctx, users.RegistrationRequest{
+		Email: email, Password: "password123",
+		FirstName: "E2E", LastName: "Tester", LegalName: "E2E Tester",
+		Country: "JP", PostalCode: "100-0001", State: "Tokyo", City: "Chiyoda", AddressLine1: "1-1",
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// 2. Login + session authentication.
+	login, err := te.userSvc.Login(ctx, email, "password123", "127.0.0.1", "e2e")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if _, _, err := te.userSvc.Authenticate(ctx, login.Token); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	// 3. Create a small real image file the agent can "fetch".
+	imagePath := filepath.Join(t.TempDir(), "ubuntu.qcow2")
+	if err := os.WriteFile(imagePath, make([]byte, 1024), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	uniq := suffix()
+	plan, err := te.planSvc.Create(ctx, &models.Plan{
+		Name: "e2e-plan-" + uniq, VCPU: 2, MemoryMB: 2048, DiskGB: 20, MonthlyPriceCents: 1000, Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+	net, err := te.netSvc.CreateNetwork(ctx, &models.Network{
+		Name: "e2e-net-" + uniq, Bridge: "br-e2e", DNS1: "1.1.1.1", DNS2: "1.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("create network: %v", err)
+	}
+	if _, err := te.netSvc.AddPool(ctx, &models.IPPool{NetworkID: net.ID, CIDR: "203.0.113.0/28", Type: "ipv4", Gateway: "203.0.113.1"}); err != nil {
+		t.Fatalf("add pool: %v", err)
+	}
+	img, err := pool.Images.Create(ctx, &models.Image{
+		Name: "ubuntu", Version: "24.04-" + uniq, Format: "qcow2", SourceURL: imagePath, CloudInitCompatible: true,
+	})
+	if err != nil {
+		t.Fatalf("create image: %v", err)
+	}
+
+	// 4. Create a VM -> async operation.
+	vm, op, err := te.vmSvc.CreateVM(ctx, user.ID, vms.CreateRequest{
+		PlanID: plan.ID, NetworkID: net.ID, ImageID: img.ID,
+		Name: "e2e-vm", Hostname: "e2e-vm",
+	}, "e2e-key-"+suffix())
+	if err != nil {
+		t.Fatalf("create vm: %v", err)
+	}
+
+	// 5. Wait for the operation to succeed (agent in fake mode always succeeds).
+	done := make(chan struct{})
+	go func() {
+		opCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		for {
+			cur, err := pool.Operations.GetByID(opCtx, op.ID)
+			if err == nil && cur.Status != models.OperationPending && cur.Status != models.OperationRunning {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("operation timed out")
+	}
+
+	final, err := pool.Operations.GetByID(ctx, op.ID)
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if final.Status != models.OperationSucceeded {
+		t.Fatalf("expected operation succeeded, got %s: %s", final.Status, final.Error)
+	}
+
+	// 6. Confirm VM status is running.
+	vmFinal, err := pool.VMs.GetByID(ctx, vm.ID)
+	if err != nil {
+		t.Fatalf("get vm: %v", err)
+	}
+	if vmFinal.Status != models.VMStatusRunning {
+		t.Errorf("expected vm running, got %s", vmFinal.Status)
+	}
+
+	// 7. Confirm IP allocation exists.
+	allocs, err := pool.IPPools.GetByVM(ctx, vm.ID)
+	if err != nil {
+		t.Fatalf("get allocations: %v", err)
+	}
+	if len(allocs) != 1 {
+		t.Fatalf("expected 1 ip allocation, got %d", len(allocs))
+	}
+	if allocs[0].IPAddress == "" || allocs[0].IPAddress == "203.0.113.0" || allocs[0].IPAddress == "203.0.113.1" {
+		t.Errorf("invalid allocated ip: %s", allocs[0].IPAddress)
+	}
+
+	// 8. The agent received the create (fake manager has the domain).
+	vmName := "vps-" + vm.InstanceID
+	if !te.agentFake.HasDomain(vmName) {
+		t.Error("agent did not receive/define the domain")
+	}
+
+	// 8b. Storage volumes (root + cloud-init) were created and uploaded.
+	if !te.agentFake.HasVolume("default", "vps-"+vm.ID+"-root") {
+		t.Error("root volume was not created on the agent")
+	}
+	if !te.agentFake.HasVolume("default", "vps-"+vm.ID+"-cloudinit") {
+		t.Error("cloud-init volume was not created on the agent")
+	}
+	// The cloud-init volume must have received an upload. The temp ISO is
+	// deleted by the agent after upload (verified by the cloudinit unit test
+	// which validates the ISO magic bytes).
+	if cidata := te.agentFake.VolumeDataFile("default", "vps-"+vm.ID+"-cloudinit"); cidata == "" {
+		t.Error("cloud-init volume has no uploaded data")
+	}
+
+	// 9. Stop the VM.
+	stopOp, err := te.vmSvc.NewOperation(ctx, user.ID, vm.ID, models.OperationStop, "")
+	if err != nil {
+		t.Fatalf("stop vm: %v", err)
+	}
+	if _, err := te.vmSvc.WaitForOperation(ctx, stopOp.ID); err != nil {
+		t.Fatalf("wait stop: %v", err)
+	}
+	stopped, _ := pool.VMs.GetByID(ctx, vm.ID)
+	if stopped.Status != models.VMStatusStopped {
+		t.Errorf("expected vm stopped, got %s", stopped.Status)
+	}
+
+	// 10. Start it again.
+	startOp, err := te.vmSvc.NewOperation(ctx, user.ID, vm.ID, models.OperationStart, "")
+	if err != nil {
+		t.Fatalf("start vm: %v", err)
+	}
+	if _, err := te.vmSvc.WaitForOperation(ctx, startOp.ID); err != nil {
+		t.Fatalf("wait start: %v", err)
+	}
+
+	// 11. Delete the VM.
+	delOp, err := te.vmSvc.NewOperation(ctx, user.ID, vm.ID, models.OperationDelete, "")
+	if err != nil {
+		t.Fatalf("delete vm: %v", err)
+	}
+	if _, err := te.vmSvc.WaitForOperation(ctx, delOp.ID); err != nil {
+		t.Fatalf("wait delete: %v", err)
+	}
+
+	// 12. Confirm IP is released and VM is terminated.
+	allocsAfter, _ := pool.IPPools.GetByVM(ctx, vm.ID)
+	for _, a := range allocsAfter {
+		if a.Status != models.IPAllocationReleased {
+			t.Errorf("ip %s not released: %s", a.IPAddress, a.Status)
+		}
+	}
+	deleted, _ := pool.VMs.GetByID(ctx, vm.ID)
+	if deleted.Status != models.VMStatusTerminated {
+		t.Errorf("expected vm terminated, got %s", deleted.Status)
+	}
+
+	// 13. The fake agent's domain was undefined.
+	if te.agentFake.HasDomain(vmName) {
+		t.Error("agent domain should have been removed")
+	}
+
+	// 14. Idempotency: creating with the same key returns the same op and does
+	// not provision a second VM.
+	_, op2, err := te.vmSvc.CreateVM(ctx, user.ID, vms.CreateRequest{
+		PlanID: plan.ID, NetworkID: net.ID, ImageID: img.ID, Name: "dup", Hostname: "dup",
+	}, op.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("idempotent create: %v", err)
+	}
+	if op2.ID != op.ID {
+		t.Errorf("idempotency key did not dedupe: %s != %s", op2.ID, op.ID)
+	}
+}
+
+func suffix() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano()%100000)
+}
+
+// waitForServer blocks until the TCP address accepts connections.
+func waitForServer(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("server %s did not start accepting connections", addr)
+}
+
+// isISOFile checks the ISO9660 magic bytes at the start of a file.
+func isISOFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 32769)
+	n, err := f.Read(buf)
+	if err != nil && n < 32769 {
+		return false
+	}
+	// ISO9660 sector 16 (offset 32768) starts with "CD001".
+	if n < 32769 {
+		return false
+	}
+	return string(buf[32768:32773]) == "CD001"
+}

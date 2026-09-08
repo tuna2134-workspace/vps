@@ -37,6 +37,7 @@ type Service struct {
 	vms         *repositories.VMRepository
 	ops         *repositories.OperationRepository
 	nodes       *repositories.NodeRepository
+	plans       *repositories.PlanRepository
 	networks    *networks.Service
 	scheduler   *scheduler.Scheduler
 	mac         *macalloc.Generator
@@ -49,6 +50,7 @@ func NewService(
 	vms *repositories.VMRepository,
 	ops *repositories.OperationRepository,
 	nodes *repositories.NodeRepository,
+	plans *repositories.PlanRepository,
 	networkSvc *networks.Service,
 	sched *scheduler.Scheduler,
 	macGen *macalloc.Generator,
@@ -60,6 +62,7 @@ func NewService(
 		vms:         vms,
 		ops:         ops,
 		nodes:       nodes,
+		plans:       plans,
 		networks:    networkSvc,
 		scheduler:   sched,
 		mac:         macGen,
@@ -87,7 +90,8 @@ type CreateRequest struct {
 
 // CreateVM registers a VM and enqueues the provisioning operation. It returns
 // the operation that drives provisioning. The idempotency key guarantees the
-// request can be safely retried.
+// request can be safely retried. Resources are derived from the plan when not
+// explicitly set.
 func (s *Service) CreateVM(ctx context.Context, userID string, req CreateRequest, idempotencyKey string) (*models.VM, *models.VMOperation, error) {
 	if idempotencyKey == "" {
 		idempotencyKey = uuid.NewString()
@@ -111,6 +115,21 @@ func (s *Service) CreateVM(ctx context.Context, userID string, req CreateRequest
 		if !ok {
 			return nil, nil, ErrBillingRequired
 		}
+	}
+
+	// Resolve resources from the plan when not provided explicitly.
+	plan, err := s.plans.GetByID(ctx, req.PlanID)
+	if err != nil {
+		return nil, nil, ErrNotFound
+	}
+	if req.VCPU <= 0 {
+		req.VCPU = plan.VCPU
+	}
+	if req.MemoryMB <= 0 {
+		req.MemoryMB = plan.MemoryMB
+	}
+	if req.DiskGB <= 0 {
+		req.DiskGB = plan.DiskGB
 	}
 
 	// Scheduler decides placement based on requested resources.

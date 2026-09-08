@@ -106,8 +106,7 @@ func (s *Service) ListPools(ctx context.Context, networkID string) ([]models.IPP
 
 // Allocate assigns the next free address for a VM within the given network.
 func (s *Service) Allocate(ctx context.Context, networkID, vmID, macAddress string) (*models.IPAllocation, error) {
-	net, err := s.networks.GetByID(ctx, networkID)
-	if err != nil {
+	if _, err := s.networks.GetByID(ctx, networkID); err != nil {
 		return nil, err
 	}
 	// Prefer the IPv4 pool; fall back to the IPv6 pool if none.
@@ -128,7 +127,7 @@ func (s *Service) Allocate(ctx context.Context, networkID, vmID, macAddress stri
 	if pool == nil {
 		pool = &pools[0]
 	}
-	alloc, err := s.pools.Allocate(ctx, pool.ID, vmID, macAddress, net.DNS1, 0)
+	alloc, err := s.pools.Allocate(ctx, pool.ID, vmID, macAddress, pool.Gateway, 0)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			return nil, ErrNotFound

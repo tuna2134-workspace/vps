@@ -9,7 +9,6 @@ import (
 	"sort"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
-	"github.com/tuna2134/vps/internal/controlplane/repositories"
 )
 
 var (
@@ -26,13 +25,23 @@ type Request struct {
 	ClusterID string
 }
 
-// Scheduler picks the most suitable node for a placement request.
-type Scheduler struct {
-	nodes *repositories.NodeRepository
-	vms   *repositories.VMRepository
+// NodeSource lists candidate nodes for placement.
+type NodeSource interface {
+	ListHealthy(ctx context.Context) ([]models.Node, error)
 }
 
-func New(nodes *repositories.NodeRepository, vms *repositories.VMRepository) *Scheduler {
+// VMCounter counts VMs on a node (used for reporting).
+type VMCounter interface {
+	CountByNode(ctx context.Context, nodeID string) (int, error)
+}
+
+// Scheduler picks the most suitable node for a placement request.
+type Scheduler struct {
+	nodes NodeSource
+	vms   VMCounter
+}
+
+func New(nodes NodeSource, vms VMCounter) *Scheduler {
 	return &Scheduler{nodes: nodes, vms: vms}
 }
 

@@ -84,6 +84,21 @@ func (s *Service) RegisterNode(ctx context.Context, clusterID, name, endpoint st
 }
 
 func (s *Service) ListNodes(ctx context.Context, clusterID string) ([]models.Node, error) {
+	if clusterID == "" {
+		clusters, err := s.clusters.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var out []models.Node
+		for _, c := range clusters {
+			nodes, err := s.nodes.ListByCluster(ctx, c.ID)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, nodes...)
+		}
+		return out, nil
+	}
 	return s.nodes.ListByCluster(ctx, clusterID)
 }
 

@@ -1,9 +1,10 @@
 package libvirt
 
 import (
-	"encoding/xml"
 	"fmt"
 	"os"
+
+	libvirtxml "libvirt.org/go/libvirtxml"
 )
 
 func openFile(path string) (*os.File, error) {
@@ -14,51 +15,49 @@ func openFile(path string) (*os.File, error) {
 	return f, nil
 }
 
-type domainXML struct {
-	Disks []struct {
-		Device string `xml:"device,attr"`
-		Source struct {
-			File string `xml:"file,attr"`
-		} `xml:"source"`
-		Target struct {
-			Dev string `xml:"dev,attr"`
-		} `xml:"target"`
-	} `xml:"devices>disk"`
-	Graphics []struct {
-		Type   string `xml:"type,attr"`
-		Listen string `xml:"listen,attr"`
-		Port   int    `xml:"port,attr"`
-	} `xml:"devices>graphics"`
-}
-
+// parseDomainDisks extracts disk info from a domain XML document.
 func parseDomainDisks(xmlDoc string) ([]DiskInfo, error) {
-	var d domainXML
-	if err := xml.Unmarshal([]byte(xmlDoc), &d); err != nil {
+	var d libvirtxml.Domain
+	if err := d.Unmarshal(xmlDoc); err != nil {
 		return nil, fmt.Errorf("parse domain xml: %w", err)
 	}
+	if d.Devices == nil {
+		return nil, nil
+	}
 	var out []DiskInfo
-	for _, disk := range d.Disks {
+	for _, disk := range d.Devices.Disks {
+		source := ""
+		if disk.Source != nil && disk.Source.File != nil {
+			source = disk.Source.File.File
+		}
+		dev := ""
+		if disk.Target != nil {
+			dev = disk.Target.Dev
+		}
 		out = append(out, DiskInfo{
-			Device:        disk.Device,
-			Source:        disk.Source.File,
-			CapacityBytes: 0, // populated by volume lookup where possible
+			Device: dev,
+			Source: source,
 		})
 	}
 	return out, nil
 }
 
+// parseVNCInfo extracts the VNC graphics endpoint from a domain XML document.
 func parseVNCInfo(xmlDoc string) (string, int, error) {
-	var d domainXML
-	if err := xml.Unmarshal([]byte(xmlDoc), &d); err != nil {
+	var d libvirtxml.Domain
+	if err := d.Unmarshal(xmlDoc); err != nil {
 		return "", 0, fmt.Errorf("parse domain xml: %w", err)
 	}
-	for _, g := range d.Graphics {
-		if g.Type == "vnc" {
-			host := g.Listen
+	if d.Devices == nil {
+		return "", 0, fmt.Errorf("domain has no vnc graphics device")
+	}
+	for _, g := range d.Devices.Graphics {
+		if g.VNC != nil {
+			host := g.VNC.Listen
 			if host == "" || host == "0.0.0.0" || host == "::" {
 				host = "127.0.0.1"
 			}
-			return host, g.Port, nil
+			return host, g.VNC.Port, nil
 		}
 	}
 	return "", 0, fmt.Errorf("domain has no vnc graphics device")

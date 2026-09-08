@@ -47,6 +47,9 @@ func Generate(path string, cfg Config, workDir string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create iso directory: %w", err)
 	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return fmt.Errorf("create work directory: %w", err)
+	}
 
 	// Remove any stale file first (Create() requires the path to not exist).
 	_ = os.Remove(path)
@@ -70,6 +73,9 @@ func Generate(path string, cfg Config, workDir string) error {
 	if err != nil {
 		return fmt.Errorf("create cloud-init disk: %w", err)
 	}
+
+	// ISO9660 mandates a 2048-byte logical sector size.
+	theDisk.LogicalBlocksize = 2048
 
 	fs, err := theDisk.CreateFilesystem(disk.FilesystemSpec{
 		Partition:   0,

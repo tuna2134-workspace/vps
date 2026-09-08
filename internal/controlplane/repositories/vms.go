@@ -45,11 +45,12 @@ func scanVM(row pgx.Row) (*models.VM, error) {
 
 func (r *VMRepository) Create(ctx context.Context, v *models.VM) (*models.VM, error) {
 	row := r.db.QueryRow(ctx, `
-		INSERT INTO vms (user_id, plan_id, network_id, image_id, name, hostname, status,
+		INSERT INTO vms (user_id, plan_id, node_id, network_id, image_id, name, hostname, status,
 			vcpu, memory_mb, disk_gb, mac_address, instance_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING `+vmCols,
-		v.UserID, v.PlanID, v.NetworkID, v.ImageID, v.Name, v.Hostname, v.Status,
+		v.UserID, nullableID(v.PlanID), nullableID(v.NodeID), nullableID(v.NetworkID), nullableID(v.ImageID),
+		v.Name, v.Hostname, v.Status,
 		v.VCPU, v.MemoryMB, v.DiskGB, v.MACAddress, v.InstanceID)
 	created, err := scanVM(row)
 	if err != nil {
@@ -59,6 +60,14 @@ func (r *VMRepository) Create(ctx context.Context, v *models.VM) (*models.VM, er
 		return nil, fmt.Errorf("create vm: %w", err)
 	}
 	return created, nil
+}
+
+// nullableID converts an empty string to NULL for nullable UUID columns.
+func nullableID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
 }
 
 func (r *VMRepository) GetByID(ctx context.Context, id string) (*models.VM, error) {
@@ -208,7 +217,7 @@ func (r *OperationRepository) Create(ctx context.Context, o *models.VMOperation)
 		INSERT INTO vm_operations (vm_id, operation_type, status, idempotency_key)
 		VALUES ($1, $2, 'pending', $3)
 		RETURNING `+operationCols,
-		o.VMID, o.OperationType, o.IdempotencyKey)
+		nullableID(o.VMID), o.OperationType, o.IdempotencyKey)
 	created, err := scanOperation(row)
 	if err != nil {
 		if isUniqueViolation(err) {

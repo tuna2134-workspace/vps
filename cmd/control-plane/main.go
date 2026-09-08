@@ -134,7 +134,7 @@ func run(log *slog.Logger) error {
 	consoleAgent := &agentConsoleAdapter{factory: agentFactory}
 	consoleSvc := console.NewService(repos.ConsoleTokens, consoleAgent, cfg.ConsoleTokenTTL, auditSvc, cfg.PublicBaseURL)
 
-	vmSvc := vms.NewService(repos.VMs, repos.Operations, repos.Nodes, networkSvc, sched, macGen, auditSvc, provisioner, billingGate)
+	vmSvc := vms.NewService(repos.VMs, repos.Operations, repos.Nodes, repos.Plans, networkSvc, sched, macGen, auditSvc, provisioner, billingGate)
 
 	// Wire billing lifecycle callbacks into VM lifecycle.
 	billingSvc.OnSubscriptionCanceled = func(ctx context.Context, stripeSubID string) error {

@@ -1,0 +1,1600 @@
+openapi: 3.0.3
+info:
+  title: VPS Hosting Platform API
+  version: 1.0.0
+  description: |
+    Backend API for a VirtFusion-style VPS hosting platform. This document is
+    the contract a future UI team implements against.
+
+    All responses use a consistent envelope:
+      * Success: `{"data": ...}`
+      * Error:   `{"error": {"code": "...", "message": "..."}}`
+
+    Authentication uses opaque bearer session tokens returned by `POST /v1/auth/login`.
+    Long-running operations (VM provisioning, start, stop, reboot, delete) are
+    asynchronous: the create/lifecycle endpoints return an `operation_id`, and
+    clients poll `GET /v1/operations/{id}` until the status is terminal.
+  contact:
+    name: Platform Engineering
+  servers:
+    - url: http://localhost:8080
+      description: Local development
+  tags:
+    - name: Authentication
+    - name: Users
+    - name: VMs
+    - name: Operations
+    - name: Plans
+    - name: Networks
+    - name: IP Pools
+    - name: Clusters
+    - name: Nodes
+    - name: Billing
+    - name: Console
+    - name: System
+
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: Liveness probe
+      operationId: healthz
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /readyz:
+    get:
+      tags: [System]
+      summary: Readiness probe
+      operationId: readyz
+      responses:
+        "200":
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: Service is not ready
+
+  /v1/auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a new account
+      description: >
+        Creates a user account. The legal name and billing address are
+        required and stored as PII; they are never returned by the API.
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/EmailTaken"
+  /v1/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Log in and obtain a session token
+      description: >
+        Returns an opaque bearer token. Errors are generic to prevent email
+        enumeration. Repeated failures trigger rate limiting / lockout.
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              example:
+                email: taro@example.com
+                password: supersecret1
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/InvalidCredentials"
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+  /v1/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Log out (revoke the current session)
+      operationId: logout
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Session revoked
+  /v1/auth/sessions:
+    get:
+      tags: [Authentication]
+      summary: List active sessions
+      operationId: listSessions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Active sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Session"
+  /v1/auth/sessions/{id}:
+    delete:
+      tags: [Authentication]
+      summary: Revoke a session
+      operationId: revokeSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SessionIdPath"
+      responses:
+        "204":
+          description: Session revoked
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/auth/sessions/revoke_all:
+    post:
+      tags: [Authentication]
+      summary: Revoke all sessions except the current one
+      operationId: revokeAllSessions
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: All other sessions revoked
+  /v1/auth/change-password:
+    post:
+      tags: [Authentication]
+      summary: Change password
+      description: All other sessions are revoked on success.
+      operationId: changePassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                  format: password
+                new_password:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        "204":
+          description: Password changed
+        "401":
+          $ref: "#/components/responses/InvalidCredentials"
+  /v1/users/me:
+    get:
+      tags: [Users]
+      summary: Get the current user profile
+      operationId: me
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /v1/plans:
+    get:
+      tags: [Plans]
+      summary: List plans
+      operationId: listPlans
+      parameters:
+        - name: active
+          in: query
+          schema:
+            type: boolean
+            default: true
+          description: Filter to active plans only
+      responses:
+        "200":
+          description: List of plans
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Plan"
+    post:
+      tags: [Plans]
+      summary: Create a plan (admin)
+      operationId: createPlan
+      security:
+        - bearerAuth: []
+      x-role: support
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanRequest"
+      responses:
+        "201":
+          description: Plan created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+  /v1/plans/{id}:
+    get:
+      tags: [Plans]
+      summary: Get a plan
+      operationId: getPlan
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "200":
+          description: Plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Plans]
+      summary: Update a plan (admin)
+      description: >
+        The current plan definition is snapshotted into the version history.
+        Live subscriptions are unaffected.
+      operationId: updatePlan
+      security:
+        - bearerAuth: []
+      x-role: support
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanRequest"
+      responses:
+        "200":
+          description: Plan updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+  /v1/plans/{id}/versions:
+    get:
+      tags: [Plans]
+      summary: List plan version history (admin)
+      operationId: listPlanVersions
+      security:
+        - bearerAuth: []
+      x-role: support
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "200":
+          description: Version history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Plan"
+  /v1/plans/{id}/active:
+    patch:
+      tags: [Plans]
+      summary: Activate or deactivate a plan (admin)
+      operationId: setPlanActive
+      security:
+        - bearerAuth: []
+      x-role: support
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+        - name: active
+          in: query
+          required: true
+          schema:
+            type: boolean
+      responses:
+        "204":
+          description: Updated
+
+  /v1/networks:
+    get:
+      tags: [Networks]
+      summary: List networks
+      operationId: listNetworks
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of networks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Network"
+    post:
+      tags: [Networks]
+      summary: Create a network (admin)
+      description: Networks always specify the bridge a VM NIC attaches to.
+      operationId: createNetwork
+      security:
+        - bearerAuth: []
+      x-role: support
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NetworkRequest"
+      responses:
+        "201":
+          description: Network created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+  /v1/networks/{id}:
+    get:
+      tags: [Networks]
+      summary: Get a network
+      operationId: getNetwork
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "200":
+          description: Network
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+  /v1/networks/{id}/pools:
+    get:
+      tags: [IP Pools]
+      summary: List IP pools in a network
+      operationId: listPools
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "200":
+          description: IP pools
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IPPool"
+    post:
+      tags: [IP Pools]
+      summary: Add an IP pool (admin)
+      operationId: addPool
+      security:
+        - bearerAuth: []
+      x-role: support
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IPPoolRequest"
+      responses:
+        "201":
+          description: Pool created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IPPool"
+  /v1/networks/{id}/status:
+    patch:
+      tags: [Networks]
+      summary: Set a network active/inactive (admin)
+      operationId: setNetworkStatus
+      security:
+        - bearerAuth: []
+      x-role: support
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+        - name: status
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [active, inactive]
+      responses:
+        "204":
+          description: Updated
+
+  /v1/clusters:
+    get:
+      tags: [Clusters]
+      summary: List clusters (admin)
+      operationId: listClusters
+      security:
+        - bearerAuth: []
+      x-role: support
+      responses:
+        "200":
+          description: Clusters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Cluster"
+    post:
+      tags: [Clusters]
+      summary: Create a cluster (admin)
+      operationId: createCluster
+      security:
+        - bearerAuth: []
+      x-role: support
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Cluster created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cluster"
+  /v1/nodes:
+    get:
+      tags: [Nodes]
+      summary: List nodes (admin)
+      operationId: listNodes
+      security:
+        - bearerAuth: []
+      x-role: support
+      parameters:
+        - name: cluster_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Nodes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Node"
+    post:
+      tags: [Nodes]
+      summary: Register an agent node (admin)
+      operationId: registerNode
+      security:
+        - bearerAuth: []
+      x-role: support
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cluster_id, name, agent_endpoint]
+              example:
+                cluster_id: 6b17cffa-8f80-441a-b7fb-b22a414f4cdc
+                name: node-01
+                agent_endpoint: node-01.internal:9001
+              properties:
+                cluster_id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                agent_endpoint:
+                  type: string
+      responses:
+        "201":
+          description: Node registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Node"
+  /v1/nodes/{id}:
+    get:
+      tags: [Nodes]
+      summary: Get a node (admin)
+      operationId: getNode
+      security:
+        - bearerAuth: []
+      x-role: support
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "200":
+          description: Node
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Node"
+
+  /v1/vms:
+    get:
+      tags: [VMs]
+      summary: List the current user's VMs
+      operationId: listVMs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of VMs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VM"
+    post:
+      tags: [VMs]
+      summary: Request a new VM
+      description: >
+        VM creation is asynchronous. Resources are derived from the selected
+        plan. An `Idempotency-Key` header makes retries safe: repeating the
+        same request returns the same operation and never creates a second VM.
+      operationId: createVM
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+          description: Client-generated key for idempotent retries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVMRequest"
+            examples:
+              example:
+                value:
+                  plan_id: 6b17cffa-8f80-441a-b7fb-b22a414f4cdc
+                  network_id: 6b17cffa-8f80-441a-b7fb-b22a414f4cdc
+                  image_id: 6b17cffa-8f80-441a-b7fb-b22a414f4cdc
+                  hostname: web-01
+                  ssh_keys:
+                    - ssh-ed25519 AAAA...
+      responses:
+        "202":
+          description: Provisioning started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    example:
+                      operation_id: 4f6d1a2b-...
+                      vm_id: 3e7d9c5c-...
+                    properties:
+                      operation_id:
+                        type: string
+                        format: uuid
+                      vm_id:
+                        type: string
+                        format: uuid
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "402":
+          $ref: "#/components/responses/BillingRequired"
+        "503":
+          $ref: "#/components/responses/NoCapacity"
+  /v1/vms/{id}:
+    get:
+      tags: [VMs]
+      summary: Get a VM
+      operationId: getVM
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "200":
+          description: VM
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VM"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [VMs]
+      summary: Delete a VM (asynchronous)
+      operationId: deleteVM
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Deletion started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Operation"
+  /v1/vms/{id}/start:
+    post:
+      tags: [VMs]
+      summary: Start a VM (asynchronous)
+      operationId: startVM
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "202":
+          description: Start requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Operation"
+        "409":
+          $ref: "#/components/responses/InvalidState"
+  /v1/vms/{id}/stop:
+    post:
+      tags: [VMs]
+      summary: Gracefully stop a VM (asynchronous)
+      operationId: stopVM
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "202":
+          description: Stop requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Operation"
+        "409":
+          $ref: "#/components/responses/InvalidState"
+  /v1/vms/{id}/force_stop:
+    post:
+      tags: [VMs]
+      summary: Force-stop a VM (asynchronous)
+      operationId: forceStopVM
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "202":
+          description: Force-stop requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Operation"
+  /v1/vms/{id}/reboot:
+    post:
+      tags: [VMs]
+      summary: Reboot a VM (asynchronous)
+      operationId: rebootVM
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "202":
+          description: Reboot requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Operation"
+  /v1/vms/{id}/console:
+    post:
+      tags: [Console]
+      summary: Obtain a one-time VNC console token
+      description: >
+        The returned token authorizes a WebSocket connection to the console
+        gateway at `websocket_url`. Tokens are single-use and expire quickly.
+        The underlying VNC endpoint is never exposed to the client.
+      operationId: getVMConsole
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                console_type:
+                  type: string
+                  enum: [vnc, serial]
+                  default: vnc
+      responses:
+        "200":
+          description: Console access
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ConsoleAccess"
+        "409":
+          description: VM is not running
+  /console/ws:
+    get:
+      tags: [Console]
+      summary: Console WebSocket gateway (noVNC)
+      description: >
+        WebSocket endpoint that a noVNC client connects to. The one-time
+        `token` query parameter is validated before the gateway bridges the
+        socket to the VM's VNC port.
+      operationId: consoleWebsocket
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: One-time console token from POST /v1/vms/{id}/console
+      responses:
+        "101":
+          description: Switching Protocols (WebSocket established)
+        "401":
+          description: Missing or invalid token
+
+  /v1/operations/{id}:
+    get:
+      tags: [Operations]
+      summary: Poll an asynchronous operation
+      operationId: getOperation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceIdPath"
+      responses:
+        "200":
+          description: Operation state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Operation"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/billing/subscription:
+    get:
+      tags: [Billing]
+      summary: Get the current user's subscription
+      operationId: getSubscription
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Subscription (or null if none)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: "#/components/schemas/Subscription"
+                      - type: "null"
+    post:
+      tags: [Billing]
+      summary: Create a Stripe subscription
+      operationId: createSubscription
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stripe_price_id]
+              properties:
+                stripe_price_id:
+                  type: string
+                  description: Stripe Price ID for the plan
+      responses:
+        "201":
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+  /v1/billing/invoices:
+    get:
+      tags: [Billing]
+      summary: List the current user's invoices
+      operationId: listInvoices
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Invoices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Invoice"
+  /v1/webhooks/stripe:
+    post:
+      tags: [Billing]
+      summary: Stripe webhook endpoint
+      description: >
+        Verifies the `Stripe-Signature` header and processes events
+        idempotently. Duplicate events are acknowledged without side effects.
+      operationId: stripeWebhook
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Event accepted
+        "400":
+          description: Signature verification failed
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Session token from POST /v1/auth/login
+  parameters:
+    ResourceIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SessionIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    InvalidCredentials:
+      description: Invalid email or password
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    EmailTaken:
+      description: Email already registered
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyAttempts:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BillingRequired:
+      description: An active subscription is required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NoCapacity:
+      description: No node has sufficient capacity
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InvalidState:
+      description: The VM is not in a valid state for this operation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      example:
+        error:
+          code: RESOURCE_NOT_FOUND
+          message: resource not found
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: RESOURCE_NOT_FOUND
+            message:
+              type: string
+    HealthResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+              example: ok
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+        - first_name
+        - last_name
+        - legal_name
+        - country
+        - postal_code
+        - state
+        - city
+        - address_line_1
+      example:
+        email: taro@example.com
+        password: supersecret1
+        first_name: Taro
+        last_name: Yamada
+        legal_name: Taro Yamada
+        country: JP
+        postal_code: "100-0001"
+        state: Tokyo
+        city: Chiyoda
+        address_line_1: 1-1 Marunouchi
+        address_line_2: ""
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+        first_name:
+          type: string
+        last_name:
+          type: string
+        legal_name:
+          type: string
+          description: Full legal name
+        country:
+          type: string
+        postal_code:
+          type: string
+        state:
+          type: string
+          description: State or prefecture
+        city:
+          type: string
+        address_line_1:
+          type: string
+        address_line_2:
+          type: string
+    User:
+      type: object
+      description: Never contains the address (PII)
+      example:
+        data:
+          id: 6b17cffa-8f80-441a-b7fb-b22a414f4cdc
+          email: taro@example.com
+          first_name: Taro
+          last_name: Yamada
+          legal_name: Taro Yamada
+          status: active
+          roles: [user]
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+            first_name:
+              type: string
+            last_name:
+              type: string
+            legal_name:
+              type: string
+            status:
+              type: string
+              enum: [pending, active, suspended, disabled]
+            roles:
+              type: array
+              items:
+                type: string
+                enum: [user, support, admin]
+    LoginResponse:
+      type: object
+      example:
+        data:
+          token: 6mxd5m8JqfjR9V...
+          expires_at: "2026-09-09T04:00:00Z"
+      properties:
+        data:
+          type: object
+          required: [token, expires_at]
+          properties:
+            token:
+              type: string
+              description: Opaque bearer token (sent as Authorization: Bearer <token>)
+            expires_at:
+              type: string
+              format: date-time
+    Session:
+      type: object
+      example:
+        data:
+          id: 4f6d1a2b-...
+          user_id: 6b17cffa-...
+          created_at: "2026-09-08T03:00:00Z"
+          expires_at: "2026-09-09T03:00:00Z"
+          last_seen_at: "2026-09-08T03:00:00Z"
+          ip: 203.0.113.7
+          user_agent: Mozilla/5.0...
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            user_id:
+              type: string
+              format: uuid
+            created_at:
+              type: string
+              format: date-time
+            expires_at:
+              type: string
+              format: date-time
+            last_seen_at:
+              type: string
+              format: date-time
+            ip:
+              type: string
+            user_agent:
+              type: string
+            revoked_at:
+              type: string
+              format: date-time
+              nullable: true
+    Plan:
+      type: object
+      example:
+        data:
+          id: 6b17cffa-...
+          name: starter
+          vcpu: 2
+          memory_mb: 2048
+          disk_gb: 40
+          bandwidth_gb: 2000
+          network_speed_mbps: 1000
+          ipv4_count: 1
+          ipv6_prefix: 64
+          monthly_price_cents: 1500
+          currency: USD
+          version: 1
+          active: true
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            description:
+              type: string
+            vcpu:
+              type: integer
+            memory_mb:
+              type: integer
+            disk_gb:
+              type: integer
+            bandwidth_gb:
+              type: integer
+            network_speed_mbps:
+              type: integer
+            ipv4_count:
+              type: integer
+            ipv6_prefix:
+              type: integer
+            monthly_price_cents:
+              type: integer
+            currency:
+              type: string
+            version:
+              type: integer
+            active:
+              type: boolean
+    PlanRequest:
+      type: object
+      required: [name, vcpu, memory_mb, disk_gb]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        vcpu:
+          type: integer
+        memory_mb:
+          type: integer
+        disk_gb:
+          type: integer
+        bandwidth_gb:
+          type: integer
+        network_speed_mbps:
+          type: integer
+        ipv4_count:
+          type: integer
+        ipv6_prefix:
+          type: integer
+        monthly_price_cents:
+          type: integer
+        currency:
+          type: string
+    Network:
+      type: object
+      example:
+        data:
+          id: 6b17cffa-...
+          name: public
+          bridge: br-public
+          ipv4_cidr: 203.0.113.0/24
+          ipv6_cidr: 2001:db8::/64
+          dns1: 1.1.1.1
+          dns2: 1.0.0.1
+          status: active
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            description:
+              type: string
+            bridge:
+              type: string
+              description: Linux bridge the VM NIC attaches to (br0, br-public, ...)
+            ipv4_cidr:
+              type: string
+            ipv6_cidr:
+              type: string
+            dns1:
+              type: string
+            dns2:
+              type: string
+            status:
+              type: string
+              enum: [active, inactive]
+    NetworkRequest:
+      type: object
+      required: [name, bridge]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        bridge:
+          type: string
+        ipv4_cidr:
+          type: string
+        ipv6_cidr:
+          type: string
+        dns1:
+          type: string
+        dns2:
+          type: string
+    IPPool:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            network_id:
+              type: string
+              format: uuid
+            cidr:
+              type: string
+            type:
+              type: string
+              enum: [ipv4, ipv6]
+            gateway:
+              type: string
+    IPPoolRequest:
+      type: object
+      required: [cidr, type]
+      properties:
+        cidr:
+          type: string
+          example: 203.0.113.0/24
+        type:
+          type: string
+          enum: [ipv4, ipv6]
+        gateway:
+          type: string
+          example: 203.0.113.1
+    Cluster:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            description:
+              type: string
+            status:
+              type: string
+              enum: [active, disabled]
+    Node:
+      type: object
+      example:
+        data:
+          id: 6b17cffa-...
+          cluster_id: 6b17cffa-...
+          name: node-01
+          agent_endpoint: node-01.internal:9001
+          status: healthy
+          cpu_capacity: 32
+          memory_capacity_mb: 65536
+          storage_capacity_gb: 2000
+          last_heartbeat: "2026-09-08T03:00:00Z"
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            cluster_id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            agent_endpoint:
+              type: string
+            status:
+              type: string
+              enum: [healthy, degraded, offline, disabled]
+            cpu_capacity:
+              type: integer
+            memory_capacity_mb:
+              type: integer
+            storage_capacity_gb:
+              type: integer
+            cpu_usage_percent:
+              type: number
+            memory_usage_percent:
+              type: number
+            last_heartbeat:
+              type: string
+              format: date-time
+              nullable: true
+    CreateVMRequest:
+      type: object
+      required: [plan_id, network_id, image_id]
+      properties:
+        plan_id:
+          type: string
+          format: uuid
+          description: Selects the plan whose resources size the VM
+        network_id:
+          type: string
+          format: uuid
+        image_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        hostname:
+          type: string
+        ssh_keys:
+          type: array
+          items:
+            type: string
+          description: SSH keys written to cloud-init
+        root_password:
+          type: string
+          description: Optional cloud-init root password (not recommended)
+        idempotency_key:
+          type: string
+          description: Alternative to the Idempotency-Key header
+    VM:
+      type: object
+      example:
+        data:
+          id: 3e7d9c5c-...
+          user_id: 6b17cffa-...
+          name: web-01
+          hostname: web-01
+          status: running
+          vcpu: 2
+          memory_mb: 2048
+          disk_gb: 40
+          mac_address: 02:00:00:00:00:01
+          created_at: "2026-09-08T03:00:00Z"
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            user_id:
+              type: string
+              format: uuid
+            plan_id:
+              type: string
+              format: uuid
+              nullable: true
+            node_id:
+              type: string
+              format: uuid
+              nullable: true
+            network_id:
+              type: string
+              format: uuid
+              nullable: true
+            name:
+              type: string
+            hostname:
+              type: string
+            status:
+              type: string
+              enum: [pending, provisioning, running, stopped, suspended, terminated, error]
+            vcpu:
+              type: integer
+            memory_mb:
+              type: integer
+            disk_gb:
+              type: integer
+            mac_address:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    Operation:
+      type: object
+      example:
+        data:
+          id: 4f6d1a2b-...
+          vm_id: 3e7d9c5c-...
+          operation_type: create
+          status: succeeded
+          created_at: "2026-09-08T03:00:00Z"
+          updated_at: "2026-09-08T03:01:00Z"
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            vm_id:
+              type: string
+              format: uuid
+              nullable: true
+            operation_type:
+              type: string
+              enum: [create, delete, start, stop, force_stop, reboot, terminate]
+            status:
+              type: string
+              enum: [pending, running, succeeded, failed]
+            error:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    ConsoleAccess:
+      type: object
+      example:
+        data:
+          console_type: vnc
+          token: 5xt9...
+          expires_at: "2026-09-08T03:02:00Z"
+          websocket_url: wss://panel.example.com/console/ws?token=5xt9...
+      properties:
+        data:
+          type: object
+          properties:
+            console_type:
+              type: string
+              enum: [vnc, serial]
+            token:
+              type: string
+              description: Single-use token embedded in websocket_url
+            expires_at:
+              type: string
+              format: date-time
+            websocket_url:
+              type: string
+              format: uri
+    Subscription:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              type: string
+              enum: [incomplete, active, trialing, past_due, canceled, unpaid, incomplete_expired]
+            billing_status:
+              type: string
+              enum: [active, past_due, unpaid, canceled, suspended]
+            current_period_end:
+              type: string
+              format: date-time
+    Invoice:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            stripe_invoice_id:
+              type: string
+            amount_cents:
+              type: integer
+            currency:
+              type: string
+            status:
+              type: string
+            paid_at:
+              type: string
+              format: date-time
+              nullable: true
+            created_at:
+              type: string
+              format: date-time
+
+security:
+  - bearerAuth: []

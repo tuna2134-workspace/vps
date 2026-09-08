@@ -178,7 +178,7 @@ func (r *IPPoolRepository) Allocate(ctx context.Context, poolID, vmID, macAddres
 		prefix = p.Bits()
 	}
 
-	addr, err := r.nextFreeAddress(ctx, tx, poolID, pool.CIDR)
+	addr, err := r.nextFreeAddress(ctx, tx, poolID, pool.CIDR, gateway)
 	if err != nil {
 		return nil, err
 	}
@@ -199,18 +199,30 @@ func (r *IPPoolRepository) Allocate(ctx context.Context, poolID, vmID, macAddres
 	return &a, nil
 }
 
-func (r *IPPoolRepository) nextFreeAddress(ctx context.Context, tx pgx.Tx, poolID, cidr string) (string, error) {
+func (r *IPPoolRepository) nextFreeAddress(ctx context.Context, tx pgx.Tx, poolID, cidr, gateway string) (string, error) {
 	prefix, err := netip.ParsePrefix(cidr)
 	if err != nil {
 		return "", fmt.Errorf("parse pool cidr: %w", err)
 	}
-	gateway := prefix.Addr()
-	// Number of usable addresses (skip network, gateway, broadcast for IPv4).
-	usable := usableAddresses(prefix)
-	addr := prefix.Addr().Next()
-	for i := int64(0); i < usable; i++ {
-		if addr == gateway || isBroadcast(prefix, addr) {
-			addr = addr.Next()
+	gw := netip.Addr{}
+	if gateway != "" {
+		if a, err := netip.ParseAddr(gateway); err == nil {
+			gw = a
+		}
+	}
+	// Scan every host address in the prefix (bounded for safety).
+	total := prefix.Addr().Next()
+	last := lastUsableAddress(prefix)
+	cap := int64(1) << 24 // safety bound
+	if prefix.Addr().Is4() {
+		cap = 1 << (32 - prefix.Bits())
+	}
+	for i := int64(0); i < cap; i++ {
+		if total.IsValid() && total == last {
+			break
+		}
+		if (gw.IsValid() && total == gw) || isBroadcast(prefix, total) {
+			total = total.Next()
 			continue
 		}
 		var exists bool
@@ -218,15 +230,53 @@ func (r *IPPoolRepository) nextFreeAddress(ctx context.Context, tx pgx.Tx, poolI
 			SELECT EXISTS (
 				SELECT 1 FROM ip_allocations
 				WHERE pool_id = $1 AND ip_address = $2 AND status = 'allocated'
-			)`, poolID, addr.String()).Scan(&exists); err != nil {
+			)`, poolID, total.String()).Scan(&exists); err != nil {
 			return "", fmt.Errorf("check ip availability: %w", err)
 		}
 		if !exists {
-			return addr.String(), nil
+			return total.String(), nil
 		}
-		addr = addr.Next()
+		total = total.Next()
 	}
 	return "", fmt.Errorf("ip pool %s exhausted", cidr)
+}
+
+// lastUsableAddress returns the last address within the prefix (broadcast for
+// IPv4, the masked max for IPv6).
+func lastUsableAddress(p netip.Prefix) netip.Addr {
+	if p.Addr().Is4() {
+		bytes := p.Masked().Addr().As4()
+		n := 32 - p.Bits()
+		for i := 3; i >= 0 && n > 0; i-- {
+			if n >= 8 {
+				bytes[i] = 0xFF
+				n -= 8
+			} else {
+				bytes[i] |= byte(0xFF << (8 - n))
+				n = 0
+			}
+		}
+		return netip.AddrFrom4(bytes)
+	}
+	bytes := p.Masked().Addr().As16()
+	n := 128 - p.Bits()
+	for i := 15; i >= 0 && n > 0; i-- {
+		if n >= 8 {
+			bytes[i] = 0xFF
+			n -= 8
+		} else {
+			bytes[i] |= byte(0xFF << (8 - n))
+			n = 0
+		}
+	}
+	return netip.AddrFrom16(bytes)
+}
+
+func isBroadcast(p netip.Prefix, addr netip.Addr) bool {
+	if !addr.Is4() {
+		return false
+	}
+	return addr == lastUsableAddress(p)
 }
 
 func usableAddresses(p netip.Prefix) int64 {
@@ -238,26 +288,6 @@ func usableAddresses(p netip.Prefix) int64 {
 		return 1<<(32-bits) - 3 // minus network, gateway, broadcast
 	}
 	return 1 << (128 - p.Bits())
-}
-
-func isBroadcast(p netip.Prefix, addr netip.Addr) bool {
-	if !addr.Is4() {
-		return false
-	}
-	last := p.Masked().Addr()
-	// last usable IPv4 address in the prefix
-	bytes := last.As4()
-	n := 32 - p.Bits()
-	for i := 3; i >= 0 && n > 0; i-- {
-		if n >= 8 {
-			bytes[i] = 0xFF
-			n -= 8
-		} else {
-			bytes[i] |= byte(0xFF << (8 - n))
-			n = 0
-		}
-	}
-	return addr == netip.AddrFrom4(bytes)
 }
 
 func (r *IPPoolRepository) Release(ctx context.Context, vmID string) error {

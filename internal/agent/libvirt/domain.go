@@ -1,11 +1,12 @@
 package libvirt
 
 import (
-	"encoding/xml"
 	"fmt"
+
+	libvirtxml "libvirt.org/go/libvirtxml"
 )
 
-// domainXMLTemplate is the QEMU domain description used to define VMs.
+// DomainConfig describes a VM domain to be defined via libvirt.
 type DomainConfig struct {
 	Name        string
 	UUID        string
@@ -35,7 +36,8 @@ type DomainInterface struct {
 	Model      string
 }
 
-// GenerateDomainXML renders a libvirt domain XML document from a DomainConfig.
+// GenerateDomainXML renders a libvirt domain XML document using the official
+// libvirt-go-xml bindings (libvirt.org/go/libvirtxml).
 func GenerateDomainXML(cfg DomainConfig) (string, error) {
 	if cfg.Name == "" || cfg.MemoryBytes == 0 || cfg.VCPU == 0 {
 		return "", fmt.Errorf("domain requires name, memory and vcpu")
@@ -44,189 +46,113 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 		return "", fmt.Errorf("domain requires at least one interface")
 	}
 
-	var doc struct {
-		XMLName xml.Name `xml:"domain"`
-		Type    string   `xml:"type,attr"`
-		Name    string   `xml:"name"`
-		UUID    string   `xml:"uuid,omitempty"`
-		Memory  struct {
-			Unit  string `xml:"unit,attr"`
-			Value uint64 `xml:",chardata"`
-		} `xml:"memory"`
-		VCPU uint32 `xml:"vcpu"`
-		OS   struct {
-			Type struct {
-				Arch    string `xml:"arch,attr"`
-				Machine string `xml:"machine,attr"`
-				Value   string `xml:",chardata"`
-			} `xml:"type"`
-			Boot struct {
-				Dev string `xml:"dev,attr"`
-			} `xml:"boot"`
-		} `xml:"os"`
-		Features struct {
-			ACPI struct{} `xml:"acpi"`
-			APIC struct{} `xml:"apic"`
-		} `xml:"features"`
-		CPU struct {
-			Mode string `xml:"mode,attr"`
-		} `xml:"cpu"`
-		Devices struct {
-			Emulator  string `xml:"emulator"`
-			DiskElems []struct {
-				Type   string `xml:"type,attr"`
-				Device string `xml:"device,attr"`
-				Driver struct {
-					Name  string `xml:"name,attr"`
-					Type  string `xml:"type,attr"`
-					Cache string `xml:"cache,attr"`
-				} `xml:"driver"`
-				Source struct {
-					File string `xml:"file,attr"`
-				} `xml:"source"`
-				Target struct {
-					Dev string `xml:"dev,attr"`
-					Bus string `xml:"bus,attr"`
-				} `xml:"target"`
-				Readonly struct{} `xml:"readonly"`
-			} `xml:"disk"`
-			InterfaceElems []struct {
-				Type string `xml:"type,attr"`
-				MAC  struct {
-					Address string `xml:"address,attr"`
-				} `xml:"mac"`
-				Source struct {
-					Bridge string `xml:"bridge,attr"`
-				} `xml:"source"`
-				Model struct {
-					Type string `xml:"type,attr"`
-				} `xml:"model"`
-			} `xml:"interface"`
-			SerialElems []struct {
-				Type   string `xml:"type,attr"`
-				Target struct {
-					Port int `xml:"port,attr"`
-				} `xml:"target"`
-			} `xml:"serial"`
-			ConsoleElems []struct {
-				Type   string `xml:"type,attr"`
-				Target struct {
-					Type string `xml:"type,attr"`
-					Port int    `xml:"port,attr"`
-				} `xml:"target"`
-			} `xml:"console"`
-			Graphics struct {
-				Type   string `xml:"type,attr"`
-				Port   int    `xml:"port,attr"`
-				Listen string `xml:"listen,attr"`
-				Passwd string `xml:"passwd,omitempty"`
-			} `xml:"graphics"`
-		} `xml:"devices"`
+	memory := uint(cfg.MemoryBytes)
+	vcpu := uint(cfg.VCPU)
+	domain := &libvirtxml.Domain{
+		Type: "kvm",
+		Name: cfg.Name,
+		UUID: cfg.UUID,
+		Memory: &libvirtxml.DomainMemory{
+			Value: memory,
+			Unit:  "bytes",
+		},
+		CurrentMemory: &libvirtxml.DomainCurrentMemory{
+			Value: memory,
+			Unit:  "bytes",
+		},
+		VCPU: &libvirtxml.DomainVCPU{Value: vcpu},
+		OS: &libvirtxml.DomainOS{
+			Type: &libvirtxml.DomainOSType{
+				Arch:    "x86_64",
+				Machine: "q35",
+				Type:    "hvm",
+			},
+			BootDevices: []libvirtxml.DomainBootDevice{{Dev: "hd"}},
+		},
+		Features: &libvirtxml.DomainFeatureList{
+			ACPI: &libvirtxml.DomainFeature{},
+			APIC: &libvirtxml.DomainFeatureAPIC{},
+		},
+		CPU: &libvirtxml.DomainCPU{Mode: "host-passthrough"},
+		Devices: &libvirtxml.DomainDeviceList{
+			Emulator: "/usr/bin/qemu-system-x86_64",
+		},
 	}
 
-	doc.Type = "kvm"
-	doc.Name = cfg.Name
-	doc.UUID = cfg.UUID
-	doc.Memory.Unit = "bytes"
-	doc.Memory.Value = cfg.MemoryBytes
-	doc.VCPU = cfg.VCPU
-	doc.OS.Type.Arch = "x86_64"
-	doc.OS.Type.Machine = "q35"
-	doc.OS.Type.Value = "hvm"
-	doc.OS.Boot.Dev = "hd"
-	doc.CPU.Mode = "host-passthrough"
-	doc.Devices.Emulator = "/usr/bin/qemu-system-x86_64"
-
+	// Disks.
 	for _, d := range cfg.Disks {
-		elem := struct {
-			Type   string `xml:"type,attr"`
-			Device string `xml:"device,attr"`
-			Driver struct {
-				Name  string `xml:"name,attr"`
-				Type  string `xml:"type,attr"`
-				Cache string `xml:"cache,attr"`
-			} `xml:"driver"`
-			Source struct {
-				File string `xml:"file,attr"`
-			} `xml:"source"`
-			Target struct {
-				Dev string `xml:"dev,attr"`
-				Bus string `xml:"bus,attr"`
-			} `xml:"target"`
-			Readonly struct{} `xml:"readonly"`
-		}{}
-		elem.Type = d.Type
-		elem.Device = d.Device
-		elem.Driver.Name = "qemu"
-		driverType := d.Driver
-		if driverType == "" {
-			driverType = "qcow2"
+		disk := &libvirtxml.DomainDisk{
+			Device: d.Device,
+			Driver: &libvirtxml.DomainDiskDriver{
+				Name:  "qemu",
+				Type:  d.Driver,
+				Cache: "none",
+			},
+			Source: &libvirtxml.DomainDiskSource{
+				File: &libvirtxml.DomainDiskSourceFile{File: d.Source},
+			},
+			Target: &libvirtxml.DomainDiskTarget{
+				Dev: d.TargetDev,
+				Bus: "virtio",
+			},
 		}
-		elem.Driver.Type = driverType
-		elem.Driver.Cache = "none"
-		elem.Source.File = d.Source
-		elem.Target.Dev = d.TargetDev
-		elem.Target.Bus = "virtio"
-		if !d.Writable && d.Device == "cdrom" {
-			elem.Readonly = struct{}{}
+		if !d.Writable {
+			disk.ReadOnly = &libvirtxml.DomainDiskReadOnly{}
 		}
-		doc.Devices.DiskElems = append(doc.Devices.DiskElems, elem)
+		domain.Devices.Disks = append(domain.Devices.Disks, *disk)
 	}
 
+	// Network interfaces (bridge).
 	for _, nic := range cfg.Interfaces {
-		elem := struct {
-			Type string `xml:"type,attr"`
-			MAC  struct {
-				Address string `xml:"address,attr"`
-			} `xml:"mac"`
-			Source struct {
-				Bridge string `xml:"bridge,attr"`
-			} `xml:"source"`
-			Model struct {
-				Type string `xml:"type,attr"`
-			} `xml:"model"`
-		}{}
-		elem.Type = "bridge"
-		elem.MAC.Address = nic.MACAddress
-		elem.Source.Bridge = nic.Bridge
 		model := nic.Model
 		if model == "" {
 			model = "virtio"
 		}
-		elem.Model.Type = model
-		doc.Devices.InterfaceElems = append(doc.Devices.InterfaceElems, elem)
+		ifc := &libvirtxml.DomainInterface{
+			MAC: &libvirtxml.DomainInterfaceMAC{Address: nic.MACAddress},
+			Source: &libvirtxml.DomainInterfaceSource{
+				Bridge: &libvirtxml.DomainInterfaceSourceBridge{Bridge: nic.Bridge},
+			},
+			Model: &libvirtxml.DomainInterfaceModel{Type: model},
+		}
+		domain.Devices.Interfaces = append(domain.Devices.Interfaces, *ifc)
 	}
 
-	// Serial + console for potential serial console access.
-	doc.Devices.SerialElems = append(doc.Devices.SerialElems, struct {
-		Type   string `xml:"type,attr"`
-		Target struct {
-			Port int `xml:"port,attr"`
-		} `xml:"target"`
-	}{Type: "pty", Target: struct {
-		Port int `xml:"port,attr"`
-	}{Port: 0}})
-	doc.Devices.ConsoleElems = append(doc.Devices.ConsoleElems, struct {
-		Type   string `xml:"type,attr"`
-		Target struct {
-			Type string `xml:"type,attr"`
-			Port int    `xml:"port,attr"`
-		} `xml:"target"`
-	}{Type: "pty", Target: struct {
-		Type string `xml:"type,attr"`
-		Port int    `xml:"port,attr"`
-	}{Type: "serial", Port: 0}})
+	// Serial + console (pty) for potential serial console access.
+	port0 := uint(0)
+	domain.Devices.Serials = []libvirtxml.DomainSerial{{
+		Source: &libvirtxml.DomainChardevSource{
+			Pty: &libvirtxml.DomainChardevSourcePty{},
+		},
+		Target: &libvirtxml.DomainSerialTarget{
+			Type: "isa-serial",
+			Port: &port0,
+		},
+	}}
+	domain.Devices.Consoles = []libvirtxml.DomainConsole{{
+		Source: &libvirtxml.DomainChardevSource{
+			Pty: &libvirtxml.DomainChardevSourcePty{},
+		},
+		Target: &libvirtxml.DomainConsoleTarget{
+			Type: "serial",
+			Port: &port0,
+		},
+	}}
 
-	doc.Devices.Graphics.Type = "vnc"
-	doc.Devices.Graphics.Listen = "127.0.0.1"
-	doc.Devices.Graphics.Port = -1 // auto-allocate
-	if cfg.VNCPassword != "" {
-		doc.Devices.Graphics.Passwd = cfg.VNCPassword
-	}
+	// VNC graphics, listening on loopback only (never public).
+	domain.Devices.Graphics = []libvirtxml.DomainGraphic{{
+		VNC: &libvirtxml.DomainGraphicVNC{
+			Port:     -1, // auto-allocate
+			AutoPort: "yes",
+			Listen:   "127.0.0.1",
+			Passwd:   cfg.VNCPassword,
+			Keymap:   "en-us",
+		},
+	}}
 
-	xmlDoc, err := xml.MarshalIndent(doc, "", "  ")
+	doc, err := domain.Marshal()
 	if err != nil {
 		return "", fmt.Errorf("marshal domain xml: %w", err)
 	}
-	return xml.Header + string(xmlDoc), nil
+	return doc, nil
 }

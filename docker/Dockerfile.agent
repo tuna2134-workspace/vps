@@ -1,0 +1,16 @@
+# Agent image (multi-stage)
+# In production this image must run on the hypervisor host with access to
+# libvirt (/var/run/libvirt/libvirt-sock) and the iptables binary.
+FROM golang:1.27-alpine AS build
+RUN apk add --no-cache build-base git
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agent ./cmd/agent
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata iptables ip6tables qemu-img
+COPY --from=build /out/agent /usr/local/bin/agent
+EXPOSE 9001
+ENTRYPOINT ["agent"]

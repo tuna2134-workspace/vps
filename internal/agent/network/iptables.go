@@ -123,19 +123,38 @@ func (m *IptablesManager) BindVMCreates(vmID, mac string, ipv4Addrs, ipv6Addrs [
 
 // bindRules adds anti-spoofing rules for each allowed IP. It is idempotent.
 func (m *IptablesManager) bindRules(ipt *iptables.IPTables, chain, mac string, ips []string) error {
-	for _, ip := range ips {
-		// Drop traffic claiming the VM MAC but sourced from an unassigned IP.
-		rule1 := []string{"-s", "!" + ip, "-m", "mac", "--mac-source", mac, "-j", "DROP"}
-		if err := m.appendIfMissing(ipt, chain, rule1); err != nil {
-			return err
-		}
-		// Drop traffic sourced from the VM's IP but from another MAC.
-		rule2 := []string{"-s", ip, "-m", "mac", "!", "--mac-source", mac, "-j", "DROP"}
-		if err := m.appendIfMissing(ipt, chain, rule2); err != nil {
+	for _, rule := range vmBindingRules(chain, mac, ips) {
+		if err := m.appendIfMissing(ipt, rule.chain, rule.spec); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// vmRule is a single iptables rule spec.
+type vmRule struct {
+	chain string
+	spec  []string
+}
+
+// vmBindingRules returns the idempotent IP/MAC anti-spoofing rule specs for a
+// VM chain. It is a pure function so the rules can be unit-tested without
+// touching the kernel.
+func vmBindingRules(chain, mac string, ips []string) []vmRule {
+	var rules []vmRule
+	for _, ip := range ips {
+		// Drop traffic claiming the VM MAC but sourced from an unassigned IP.
+		rules = append(rules, vmRule{
+			chain: chain,
+			spec:  []string{"-s", "!" + ip, "-m", "mac", "--mac-source", mac, "-j", "DROP"},
+		})
+		// Drop traffic sourced from the VM's IP but from another MAC.
+		rules = append(rules, vmRule{
+			chain: chain,
+			spec:  []string{"-s", ip, "-m", "mac", "!", "--mac-source", mac, "-j", "DROP"},
+		})
+	}
+	return rules
 }
 
 func (m *IptablesManager) appendIfMissing(ipt *iptables.IPTables, chain string, rule []string) error {

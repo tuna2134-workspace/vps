@@ -1,0 +1,24 @@
+# Binaries
+/bin/
+*.exe
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+dev/certs/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Agent runtime data
+/var/lib/vps-agent/
+*.qcow2
+*.iso
