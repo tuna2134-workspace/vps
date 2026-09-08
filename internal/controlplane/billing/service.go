@@ -109,7 +109,7 @@ func (s *Service) CreateSubscription(ctx context.Context, userID, stripeCustomer
 			Price: stripe.String(stripePriceID),
 		}},
 		PaymentSettings: &stripe.SubscriptionPaymentSettingsParams{
-			SaveDefaultPaymentMethod: stripe.Bool(true),
+			SaveDefaultPaymentMethod: stripe.String(string(stripe.SubscriptionPaymentSettingsSaveDefaultPaymentMethodOnSubscription)),
 		},
 	}
 	sub, err := subscription.New(params)
