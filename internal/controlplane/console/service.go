@@ -110,6 +110,11 @@ func (s *Service) WebsocketURL(baseURL, token string) string {
 	return fmt.Sprintf("%s/console/ws?token=%s", baseURL, token)
 }
 
+// BaseURL returns the configured public base URL.
+func (s *Service) BaseURL() string {
+	return s.baseURL
+}
+
 func generateToken(n int) (string, error) {
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {

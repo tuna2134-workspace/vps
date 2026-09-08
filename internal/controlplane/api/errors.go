@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
-	"github.com/tuna2134/vps/internal/controlplane/rbac"
 	"github.com/tuna2134/vps/internal/controlplane/repositories"
 	"github.com/tuna2134/vps/internal/controlplane/users"
 )
