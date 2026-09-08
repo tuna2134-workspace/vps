@@ -24,11 +24,11 @@ const sessionCols = `id, user_id, token_hash, created_at, expires_at, last_seen_
 
 func scanSession(row pgx.Row) (*models.Session, error) {
 	var s models.Session
-	var ip string
+	var ip netip.Addr
 	if err := row.Scan(&s.ID, &s.UserID, &s.TokenHash, &s.CreatedAt, &s.ExpiresAt, &s.LastSeenAt, &ip, &s.UserAgent, &s.RevokedAt); err != nil {
 		return nil, err
 	}
-	s.IP = ip
+	s.IP = ip.String()
 	return &s, nil
 }
 
