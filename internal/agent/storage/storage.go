@@ -33,6 +33,8 @@ type Storage interface {
 	VolumePath(pool, name string) (string, error)
 	// RefreshPool refreshes the pool metadata.
 	RefreshPool(pool string) error
+	// ResizeVolume grows (or shrinks) a volume's capacity.
+	ResizeVolume(pool, name string, capacityBytes uint64) error
 }
 
 // LibvirtStorage is the real implementation backed by the libvirt adapter.
@@ -101,4 +103,19 @@ func (s *LibvirtStorage) VolumePath(pool, name string) (string, error) {
 
 func (s *LibvirtStorage) RefreshPool(pool string) error {
 	return s.manager.EnsurePoolActive(pool)
+}
+
+// ResizeVolume grows the volume to the requested capacity.
+func (s *LibvirtStorage) ResizeVolume(pool, name string, capacityBytes uint64) error {
+	vol, err := s.manager.GetVolume(pool, name)
+	if err != nil {
+		return err
+	}
+	if capacityBytes <= vol.CapacityBytes {
+		return nil
+	}
+	if err := s.manager.ResizeVolume(pool, name, capacityBytes); err != nil {
+		return err
+	}
+	return nil
 }

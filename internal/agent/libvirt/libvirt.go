@@ -100,6 +100,7 @@ type Manager interface {
 	UploadVolumeFile(pool, name, path string) error
 	DeleteVolume(pool, name string) error
 	GetVolume(pool, name string) (*VolumeInfo, error)
+	ResizeVolume(pool, name string, capacityBytes uint64) error
 
 	// Node.
 	GetNodeInfo() (*NodeInfo, error)
@@ -573,6 +574,26 @@ func (a *Adapter) GetVolume(pool, name string) (*VolumeInfo, error) {
 		return nil
 	})
 	return info, err
+}
+
+// ResizeVolume grows the volume's capacity.
+func (a *Adapter) ResizeVolume(pool, name string, capacityBytes uint64) error {
+	return a.withConn(func(c *libvirt.Connect) error {
+		poolObj, err := c.LookupStoragePoolByName(pool)
+		if err != nil {
+			return fmt.Errorf("lookup pool %s: %w", pool, err)
+		}
+		defer poolObj.Free()
+		vol, err := poolObj.LookupStorageVolByName(name)
+		if err != nil {
+			return fmt.Errorf("lookup volume %s: %w", name, err)
+		}
+		defer vol.Free()
+		if err := vol.Resize(capacityBytes, libvirt.STORAGE_VOL_RESIZE_ALLOCATE); err != nil {
+			return fmt.Errorf("resize volume %s: %w", name, err)
+		}
+		return nil
+	})
 }
 
 func (a *Adapter) GetNodeInfo() (*NodeInfo, error) {
