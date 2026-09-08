@@ -10,10 +10,10 @@ import (
 
 // Volume is a storage volume reference.
 type Volume struct {
-	Pool        string
-	Name        string
-	Path        string
-	CapacityBytes uint64
+	Pool            string
+	Name            string
+	Path            string
+	CapacityBytes   uint64
 	AllocationBytes uint64
 }
 
@@ -82,10 +82,10 @@ func (s *LibvirtStorage) GetVolume(pool, name string) (*Volume, error) {
 		return nil, err
 	}
 	return &Volume{
-		Pool:          pool,
-		Name:          name,
-		Path:          vi.Path,
-		CapacityBytes: vi.CapacityBytes,
+		Pool:            pool,
+		Name:            name,
+		Path:            vi.Path,
+		CapacityBytes:   vi.CapacityBytes,
 		AllocationBytes: vi.AllocationBytes,
 	}, nil
 }

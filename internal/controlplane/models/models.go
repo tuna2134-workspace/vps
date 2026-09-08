@@ -16,9 +16,9 @@ const (
 type Role string
 
 const (
-	RoleUser   Role = "user"
+	RoleUser    Role = "user"
 	RoleSupport Role = "support"
-	RoleAdmin  Role = "admin"
+	RoleAdmin   Role = "admin"
 )
 
 // User is the authentication identity. It deliberately does NOT contain the
@@ -50,15 +50,15 @@ type UserProfile struct {
 }
 
 type Session struct {
-	ID          string
-	UserID      string
-	TokenHash   string
-	CreatedAt   time.Time
-	ExpiresAt   time.Time
-	LastSeenAt  time.Time
-	IP          string
-	UserAgent   string
-	RevokedAt   *time.Time
+	ID         string
+	UserID     string
+	TokenHash  string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	LastSeenAt time.Time
+	IP         string
+	UserAgent  string
+	RevokedAt  *time.Time
 }
 
 type Cluster struct {
@@ -92,19 +92,19 @@ type NodeMetrics struct {
 }
 
 type Node struct {
-	ID                  string
-	ClusterID           string
-	Name                string
-	AgentEndpoint       string
-	Status              NodeStatus
-	CPUCapacity         int
-	MemoryCapacityMB    int64
-	StorageCapacityGB   int64
-	CPUUsagePercent     float64
-	MemoryUsagePercent  float64
-	LastHeartbeat       *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                 string
+	ClusterID          string
+	Name               string
+	AgentEndpoint      string
+	Status             NodeStatus
+	CPUCapacity        int
+	MemoryCapacityMB   int64
+	StorageCapacityGB  int64
+	CPUUsagePercent    float64
+	MemoryUsagePercent float64
+	LastHeartbeat      *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type StoragePool struct {
@@ -119,23 +119,23 @@ type StoragePool struct {
 }
 
 type Plan struct {
-	ID                 string
-	PlanID             string
-	Name               string
-	Description        string
-	VCPU               int
-	MemoryMB           int
-	DiskGB             int
-	BandwidthGB        int
-	NetworkSpeedMbps   int
-	IPv4Count          int
-	IPv6Prefix         int
-	MonthlyPriceCents  int
-	Currency           string
-	Version            int
-	Active             bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                string
+	PlanID            string
+	Name              string
+	Description       string
+	VCPU              int
+	MemoryMB          int
+	DiskGB            int
+	BandwidthGB       int
+	NetworkSpeedMbps  int
+	IPv4Count         int
+	IPv6Prefix        int
+	MonthlyPriceCents int
+	Currency          string
+	Version           int
+	Active            bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type Network struct {
@@ -181,18 +181,18 @@ type IPAllocation struct {
 }
 
 type Image struct {
-	ID                   string
-	Name                 string
-	Version              string
-	Architecture         string
-	Format               string
-	SourceURL            string
-	Checksum             string
-	SizeBytes            int64
-	CloudInitCompatible  bool
-	Status               string
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ID                  string
+	Name                string
+	Version             string
+	Architecture        string
+	Format              string
+	SourceURL           string
+	Checksum            string
+	SizeBytes           int64
+	CloudInitCompatible bool
+	Status              string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type VMStatus string
@@ -230,13 +230,13 @@ type VM struct {
 type OperationType string
 
 const (
-	OperationCreate     OperationType = "create"
-	OperationDelete     OperationType = "delete"
-	OperationStart      OperationType = "start"
-	OperationStop       OperationType = "stop"
-	OperationForceStop  OperationType = "force_stop"
-	OperationReboot     OperationType = "reboot"
-	OperationTerminate  OperationType = "terminate"
+	OperationCreate    OperationType = "create"
+	OperationDelete    OperationType = "delete"
+	OperationStart     OperationType = "start"
+	OperationStop      OperationType = "stop"
+	OperationForceStop OperationType = "force_stop"
+	OperationReboot    OperationType = "reboot"
+	OperationTerminate OperationType = "terminate"
 )
 
 type OperationStatus string
@@ -262,25 +262,25 @@ type VMOperation struct {
 }
 
 type BillingCustomer struct {
-	ID                string
-	UserID            string
-	StripeCustomerID  string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID               string
+	UserID           string
+	StripeCustomerID string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type Subscription struct {
-	ID                    string
-	UserID                string
-	VMID                  string
-	PlanID                string
-	StripeSubscriptionID  string
-	Status                string
-	BillingStatus         string
-	CurrentPeriodStart    *time.Time
-	CurrentPeriodEnd      *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                   string
+	UserID               string
+	VMID                 string
+	PlanID               string
+	StripeSubscriptionID string
+	Status               string
+	BillingStatus        string
+	CurrentPeriodStart   *time.Time
+	CurrentPeriodEnd     *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type Invoice struct {
@@ -295,13 +295,13 @@ type Invoice struct {
 }
 
 type Payment struct {
-	ID                      string
-	UserID                  string
-	StripePaymentIntentID   string
-	AmountCents             int
-	Currency                string
-	Status                  string
-	CreatedAt               time.Time
+	ID                    string
+	UserID                string
+	StripePaymentIntentID string
+	AmountCents           int
+	Currency              string
+	Status                string
+	CreatedAt             time.Time
 }
 
 type ConsoleToken struct {

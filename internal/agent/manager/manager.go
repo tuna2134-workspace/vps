@@ -297,18 +297,18 @@ func (m *Manager) GetVM(ctx context.Context, req *agentv1.GetVMRequest) (*common
 		return nil, fmt.Errorf("get domain info: %w", err)
 	}
 	status := &commonv1.VMStatus{
-		Name:       info.Name,
-		Uuid:       info.UUID,
-		State:      mapVMState(info.State),
-		VcpuCount:  uint32(info.VCPUs),
+		Name:        info.Name,
+		Uuid:        info.UUID,
+		State:       mapVMState(info.State),
+		VcpuCount:   uint32(info.VCPUs),
 		MemoryBytes: info.MemoryBytes,
-		CpuTimeNs:  info.CPUTimeNS,
+		CpuTimeNs:   info.CPUTimeNS,
 	}
 	if ifaces, err := m.libvirt.GetDomainInterfaces(vmName); err == nil {
 		for _, ifc := range ifaces {
 			status.Interfaces = append(status.Interfaces, &commonv1.NetworkInterfaceInfo{
-				Name:       ifc.Name,
-				MacAddress: ifc.MACAddress,
+				Name:          ifc.Name,
+				MacAddress:    ifc.MACAddress,
 				Ipv4Addresses: ifc.IPv4,
 				Ipv6Addresses: ifc.IPv6,
 			})

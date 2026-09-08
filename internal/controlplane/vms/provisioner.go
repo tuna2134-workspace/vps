@@ -37,14 +37,14 @@ type ProvisionJob struct {
 // Provisioner runs VM operations asynchronously against agents. It is
 // deliberately decoupled from the scheduler and HTTP layer.
 type Provisioner struct {
-	ops       *repositories.OperationRepository
-	vms       *repositories.VMRepository
-	catalog   *Catalog
-	agents    AgentFactory
-	timeout   time.Duration
-	jobs      chan ProvisionJob
-	log       *slog.Logger
-	stop      chan struct{}
+	ops     *repositories.OperationRepository
+	vms     *repositories.VMRepository
+	catalog *Catalog
+	agents  AgentFactory
+	timeout time.Duration
+	jobs    chan ProvisionJob
+	log     *slog.Logger
+	stop    chan struct{}
 }
 
 func NewProvisioner(

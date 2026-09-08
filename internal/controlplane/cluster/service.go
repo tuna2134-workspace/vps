@@ -17,10 +17,10 @@ var (
 )
 
 type Service struct {
-	clusters  *repositories.ClusterRepository
-	nodes     *repositories.NodeRepository
-	pools     *repositories.StoragePoolRepository
-	audit     *audit.Service
+	clusters      *repositories.ClusterRepository
+	nodes         *repositories.NodeRepository
+	pools         *repositories.StoragePoolRepository
+	audit         *audit.Service
 	degradedAfter time.Duration
 	offlineAfter  time.Duration
 }

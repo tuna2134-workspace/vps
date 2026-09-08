@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -58,7 +57,7 @@ func (r *UserRepository) Create(ctx context.Context, u *models.User) (*models.Us
 func (r *UserRepository) GetByID(ctx context.Context, id string) (*models.User, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE id = $1`, id)
 	u, err := scanUser(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -70,7 +69,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*models.User, 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE lower(email) = lower($1)`, email)
 	u, err := scanUser(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -173,4 +172,17 @@ func isUniqueViolation(err error) bool {
 func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// isNoRowsOrInvalidUUID returns true when a query failed because the row does
+// not exist or the id was not a valid UUID. Both should surface as NotFound.
+func isNoRowsOrInvalidUUID(err error) bool {
+	if isNoRowsOrInvalidUUID(err) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "22P02" { // invalid_text_representation
+		return true
+	}
+	return false
 }

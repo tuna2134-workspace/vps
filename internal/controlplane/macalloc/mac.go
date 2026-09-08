@@ -2,8 +2,8 @@
 package macalloc
 
 import (
-	"crypto/rand"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 

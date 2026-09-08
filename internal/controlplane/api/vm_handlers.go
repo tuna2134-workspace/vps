@@ -9,14 +9,14 @@ import (
 )
 
 type createVMRequest struct {
-	PlanID       string   `json:"plan_id"`
-	NetworkID    string   `json:"network_id"`
-	ImageID      string   `json:"image_id"`
-	Name         string   `json:"name"`
-	Hostname     string   `json:"hostname"`
-	SSHKeys      []string `json:"ssh_keys"`
-	RootPassword string   `json:"root_password,omitempty"`
-	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	PlanID         string   `json:"plan_id"`
+	NetworkID      string   `json:"network_id"`
+	ImageID        string   `json:"image_id"`
+	Name           string   `json:"name"`
+	Hostname       string   `json:"hostname"`
+	SSHKeys        []string `json:"ssh_keys"`
+	RootPassword   string   `json:"root_password,omitempty"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
 }
 
 type createVMResponse struct {

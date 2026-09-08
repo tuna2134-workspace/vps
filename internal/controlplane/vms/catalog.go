@@ -16,12 +16,12 @@ import (
 // ProvisionRequest is a snapshot of everything the agent needs to provision a
 // VM, assembled by the Control Plane from its own state.
 type ProvisionRequest struct {
-	VM         *models.VM
-	Node       *models.Node
+	VM          *models.VM
+	Node        *models.Node
 	Allocations []models.IPAllocation
-	Image      *models.Image
-	Network    *models.Network
-	SSHKeys    []string
+	Image       *models.Image
+	Network     *models.Network
+	SSHKeys     []string
 }
 
 // Catalog resolves VM-related references (node, image, network) and builds
@@ -76,11 +76,11 @@ func (c *Catalog) Load(ctx context.Context, vmID string) (*ProvisionRequest, err
 		return nil, fmt.Errorf("load allocations: %w", err)
 	}
 	return &ProvisionRequest{
-		VM:         vm,
-		Node:       node,
+		VM:          vm,
+		Node:        node,
 		Allocations: allocs,
-		Image:      image,
-		Network:    net,
+		Image:       image,
+		Network:     net,
 	}, nil
 }
 
@@ -128,12 +128,12 @@ func (c *Catalog) BuildCreateRequest(ctx context.Context, pr *ProvisionRequest) 
 		MemoryBytes:   uint64(pr.VM.MemoryMB) * 1024 * 1024,
 		DiskSizeBytes: uint64(pr.VM.DiskGB) * 1024 * 1024 * 1024,
 		Image: &agentv1.ImageRef{
-			ImageId:            pr.Image.ID,
-			Name:               pr.Image.Name,
-			SourceUrl:          pr.Image.SourceURL,
-			Checksum:           pr.Image.Checksum,
-			SizeBytes:          uint64(pr.Image.SizeBytes),
-			Format:             pr.Image.Format,
+			ImageId:             pr.Image.ID,
+			Name:                pr.Image.Name,
+			SourceUrl:           pr.Image.SourceURL,
+			Checksum:            pr.Image.Checksum,
+			SizeBytes:           uint64(pr.Image.SizeBytes),
+			Format:              pr.Image.Format,
 			CloudInitCompatible: pr.Image.CloudInitCompatible,
 		},
 		Interfaces: interfaces,

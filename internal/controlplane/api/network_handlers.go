@@ -18,8 +18,8 @@ type networkRequest struct {
 }
 
 type poolRequest struct {
-	CIDR   string `json:"cidr"`
-	Type   string `json:"type"`
+	CIDR    string `json:"cidr"`
+	Type    string `json:"type"`
 	Gateway string `json:"gateway"`
 }
 

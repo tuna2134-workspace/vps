@@ -2,10 +2,7 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
@@ -43,7 +40,7 @@ func (r *ConsoleTokenRepository) Consume(ctx context.Context, tokenHash string) 
 	var out models.ConsoleToken
 	if err := row.Scan(&out.ID, &out.VMID, &out.UserID, &out.TokenHash, &out.ConsoleType,
 		&out.Host, &out.Port, &out.ExpiresAt, &out.UsedAt, &out.CreatedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("consume console token: %w", err)

@@ -16,24 +16,24 @@ import (
 type VMState string
 
 const (
-	StateNoState    VMState = "nostate"
-	StateRunning    VMState = "running"
-	StateBlocked    VMState = "blocked"
-	StatePaused     VMState = "paused"
-	StateShutdown   VMState = "shutdown"
-	StateCrashed    VMState = "crashed"
+	StateNoState     VMState = "nostate"
+	StateRunning     VMState = "running"
+	StateBlocked     VMState = "blocked"
+	StatePaused      VMState = "paused"
+	StateShutdown    VMState = "shutdown"
+	StateCrashed     VMState = "crashed"
 	StatePMSuspended VMState = "pmsuspended"
-	StateShutoff    VMState = "shutoff"
+	StateShutoff     VMState = "shutoff"
 )
 
 // VMInfo is a resource snapshot of a domain.
 type VMInfo struct {
-	Name        string
-	UUID        string
-	State       VMState
-	VCPUs       uint
-	MemoryBytes uint64
-	CPUTimeNS   uint64
+	Name           string
+	UUID           string
+	State          VMState
+	VCPUs          uint
+	MemoryBytes    uint64
+	CPUTimeNS      uint64
 	MaxMemoryBytes uint64
 }
 
@@ -46,10 +46,10 @@ type NodeInfo struct {
 
 // VolumeInfo describes a storage volume.
 type VolumeInfo struct {
-	Name        string
-	Key         string
-	Path        string
-	CapacityBytes uint64
+	Name            string
+	Key             string
+	Path            string
+	CapacityBytes   uint64
 	AllocationBytes uint64
 }
 
@@ -63,9 +63,9 @@ type InterfaceInfo struct {
 
 // DiskInfo describes a domain disk.
 type DiskInfo struct {
-	Device        string
-	Source        string
-	CapacityBytes uint64
+	Device          string
+	Source          string
+	CapacityBytes   uint64
 	AllocationBytes uint64
 }
 
@@ -110,7 +110,7 @@ type Manager interface {
 
 // Adapter is the real libvirt implementation.
 type Adapter struct {
-	uri string
+	uri  string
 	conn *libvirt.Connect
 }
 
@@ -313,13 +313,13 @@ func (a *Adapter) GetDomainInfo(name string) (*VMInfo, error) {
 			return fmt.Errorf("get domain uuid %s: %w", name, err)
 		}
 		info = &VMInfo{
-			Name:        name,
-			UUID:        uuid,
-			State:       mapDomainState(di.State),
-			VCPUs:       di.NrVirtCpu,
-			MemoryBytes: di.Memory * 1024,
+			Name:           name,
+			UUID:           uuid,
+			State:          mapDomainState(di.State),
+			VCPUs:          di.NrVirtCpu,
+			MemoryBytes:    di.Memory * 1024,
 			MaxMemoryBytes: di.MaxMem * 1024,
-			CPUTimeNS:   di.CpuTime,
+			CPUTimeNS:      di.CpuTime,
 		}
 		return nil
 	})

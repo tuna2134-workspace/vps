@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("not found")
+	ErrNotFound      = errors.New("not found")
 	ErrNotConfigured = errors.New("stripe is not configured")
 )
 

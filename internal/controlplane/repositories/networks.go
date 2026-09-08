@@ -2,12 +2,10 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/netip"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -50,7 +48,7 @@ func (r *NetworkRepository) Create(ctx context.Context, n *models.Network) (*mod
 func (r *NetworkRepository) GetByID(ctx context.Context, id string) (*models.Network, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+networkCols+` FROM networks WHERE id = $1`, id)
 	n, err := scanNetwork(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -142,7 +140,7 @@ func (r *IPPoolRepository) GetPoolByID(ctx context.Context, poolID string) (*mod
 		SELECT id, network_id, cidr, type, gateway FROM ip_pools WHERE id = $1`, poolID)
 	var p models.IPPool
 	if err := row.Scan(&p.ID, &p.NetworkID, &p.CIDR, &p.Type, &p.Gateway); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get ip pool: %w", err)
@@ -164,7 +162,7 @@ func (r *IPPoolRepository) Allocate(ctx context.Context, poolID, vmID, macAddres
 	if err := tx.QueryRow(ctx, `
 		SELECT id, network_id, cidr, type, gateway FROM ip_pools WHERE id = $1 FOR UPDATE`, poolID).
 		Scan(&pool.ID, &pool.NetworkID, &pool.CIDR, &pool.Type, &pool.Gateway); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("lock ip pool: %w", err)

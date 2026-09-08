@@ -2,12 +2,10 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -47,7 +45,7 @@ func (r *ClusterRepository) Create(ctx context.Context, name, description string
 func (r *ClusterRepository) GetByID(ctx context.Context, id string) (*models.Cluster, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+clusterCols+` FROM clusters WHERE id = $1`, id)
 	c, err := scanCluster(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -118,7 +116,7 @@ func (r *NodeRepository) Create(ctx context.Context, n *models.Node) (*models.No
 func (r *NodeRepository) GetByID(ctx context.Context, id string) (*models.Node, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id = $1`, id)
 	n, err := scanNode(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -130,7 +128,7 @@ func (r *NodeRepository) GetByID(ctx context.Context, id string) (*models.Node, 
 func (r *NodeRepository) GetByName(ctx context.Context, name string) (*models.Node, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+nodeCols+` FROM nodes WHERE name = $1`, name)
 	n, err := scanNode(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

@@ -2,13 +2,11 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/netip"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -48,7 +46,7 @@ func (r *SessionRepository) Create(ctx context.Context, s *models.Session) (*mod
 func (r *SessionRepository) GetByTokenHash(ctx context.Context, tokenHash string) (*models.Session, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+sessionCols+` FROM sessions WHERE token_hash = $1`, tokenHash)
 	s, err := scanSession(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -60,7 +58,7 @@ func (r *SessionRepository) GetByTokenHash(ctx context.Context, tokenHash string
 func (r *SessionRepository) GetByID(ctx context.Context, id string) (*models.Session, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+sessionCols+` FROM sessions WHERE id = $1`, id)
 	s, err := scanSession(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

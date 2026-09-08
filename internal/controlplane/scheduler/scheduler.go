@@ -19,9 +19,9 @@ var (
 
 // Request describes the resources a new VM needs.
 type Request struct {
-	VCPU    int
+	VCPU     int
 	MemoryMB int
-	DiskGB  int
+	DiskGB   int
 	// ClusterID optionally constrains placement to a single cluster.
 	ClusterID string
 }
@@ -49,8 +49,8 @@ func (s *Scheduler) Select(ctx context.Context, req Request) (*models.Node, erro
 	}
 
 	type candidate struct {
-		node   *models.Node
-		score  float64
+		node  *models.Node
+		score float64
 	}
 	var candidates []candidate
 
@@ -118,12 +118,12 @@ func (s *Scheduler) UtilizationSummary(ctx context.Context, n *models.Node) (map
 		return nil, fmt.Errorf("count vms: %w", err)
 	}
 	return map[string]any{
-		"node_id":     n.ID,
-		"vcpu_total":  n.CPUCapacity,
-		"mem_total_mb": n.MemoryCapacityMB,
+		"node_id":       n.ID,
+		"vcpu_total":    n.CPUCapacity,
+		"mem_total_mb":  n.MemoryCapacityMB,
 		"disk_total_gb": n.StorageCapacityGB,
-		"cpu_usage":   n.CPUUsagePercent,
-		"mem_usage":   n.MemoryUsagePercent,
-		"vms":         count,
+		"cpu_usage":     n.CPUUsagePercent,
+		"mem_usage":     n.MemoryUsagePercent,
+		"vms":           count,
 	}, nil
 }

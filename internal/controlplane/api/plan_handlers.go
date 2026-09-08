@@ -8,17 +8,17 @@ import (
 )
 
 type planRequest struct {
-	Name               string `json:"name"`
-	Description        string `json:"description"`
-	VCPU               int    `json:"vcpu"`
-	MemoryMB           int    `json:"memory_mb"`
-	DiskGB             int    `json:"disk_gb"`
-	BandwidthGB        int    `json:"bandwidth_gb"`
-	NetworkSpeedMbps   int    `json:"network_speed_mbps"`
-	IPv4Count          int    `json:"ipv4_count"`
-	IPv6Prefix         int    `json:"ipv6_prefix"`
-	MonthlyPriceCents  int    `json:"monthly_price_cents"`
-	Currency           string `json:"currency"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	VCPU              int    `json:"vcpu"`
+	MemoryMB          int    `json:"memory_mb"`
+	DiskGB            int    `json:"disk_gb"`
+	BandwidthGB       int    `json:"bandwidth_gb"`
+	NetworkSpeedMbps  int    `json:"network_speed_mbps"`
+	IPv4Count         int    `json:"ipv4_count"`
+	IPv6Prefix        int    `json:"ipv6_prefix"`
+	MonthlyPriceCents int    `json:"monthly_price_cents"`
+	Currency          string `json:"currency"`
 }
 
 type PlanHandlers struct {

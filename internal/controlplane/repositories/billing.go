@@ -2,10 +2,7 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
@@ -38,7 +35,7 @@ func (r *BillingRepository) GetCustomerByUser(ctx context.Context, userID string
 		FROM billing_customers WHERE user_id = $1`, userID)
 	var c models.BillingCustomer
 	if err := row.Scan(&c.ID, &c.UserID, &c.StripeCustomerID, &c.CreatedAt, &c.UpdatedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get billing customer: %w", err)
@@ -52,7 +49,7 @@ func (r *BillingRepository) GetUserByStripeCustomer(ctx context.Context, stripeC
 		FROM billing_customers WHERE stripe_customer_id = $1`, stripeCustomerID)
 	var c models.BillingCustomer
 	if err := row.Scan(&c.ID, &c.UserID, &c.StripeCustomerID, &c.CreatedAt, &c.UpdatedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get billing customer by stripe id: %w", err)
@@ -102,7 +99,7 @@ func (r *BillingRepository) GetSubscriptionByStripeID(ctx context.Context, strip
 	if err := row.Scan(&s.ID, &s.UserID, &vmID, &planID, &s.StripeSubscriptionID,
 		&s.Status, &s.BillingStatus, &s.CurrentPeriodStart, &s.CurrentPeriodEnd,
 		&s.CreatedAt, &s.UpdatedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get subscription: %w", err)
@@ -126,7 +123,7 @@ func (r *BillingRepository) GetSubscriptionByUser(ctx context.Context, userID st
 	if err := row.Scan(&s.ID, &s.UserID, &vmID, &planID, &s.StripeSubscriptionID,
 		&s.Status, &s.BillingStatus, &s.CurrentPeriodStart, &s.CurrentPeriodEnd,
 		&s.CreatedAt, &s.UpdatedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get subscription by user: %w", err)
@@ -208,7 +205,7 @@ func (r *BillingRepository) GetPaymentByIntentID(ctx context.Context, intentID s
 	var p models.Payment
 	if err := row.Scan(&p.ID, &p.UserID, &p.StripePaymentIntentID, &p.AmountCents,
 		&p.Currency, &p.Status, &p.CreatedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get payment: %w", err)

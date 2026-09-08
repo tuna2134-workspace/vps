@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tuna2134/vps/internal/controlplane/models"
 	"github.com/tuna2134/vps/internal/controlplane/users"
 )
 
@@ -116,6 +117,37 @@ func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
 	writeEmpty(w)
 }
 
+// sessionResponse is the public view of a session. The token hash is NEVER
+// exposed to clients.
+type sessionResponse struct {
+	ID         string  `json:"id"`
+	UserID     string  `json:"user_id"`
+	CreatedAt  string  `json:"created_at"`
+	ExpiresAt  string  `json:"expires_at"`
+	LastSeenAt string  `json:"last_seen_at"`
+	IP         string  `json:"ip"`
+	UserAgent  string  `json:"user_agent"`
+	RevokedAt  *string `json:"revoked_at,omitempty"`
+}
+
+func toSessionResponse(s models.Session) sessionResponse {
+	var revoked *string
+	if s.RevokedAt != nil {
+		v := s.RevokedAt.UTC().Format("2006-01-02T15:04:05Z")
+		revoked = &v
+	}
+	return sessionResponse{
+		ID:         s.ID,
+		UserID:     s.UserID,
+		CreatedAt:  s.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ExpiresAt:  s.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
+		LastSeenAt: s.LastSeenAt.UTC().Format("2006-01-02T15:04:05Z"),
+		IP:         s.IP,
+		UserAgent:  s.UserAgent,
+		RevokedAt:  revoked,
+	}
+}
+
 func (h *AuthHandlers) ListSessions(w http.ResponseWriter, r *http.Request) {
 	u := UserFrom(r.Context())
 	sessions, err := h.users.ListSessions(r.Context(), u.ID)
@@ -123,7 +155,11 @@ func (h *AuthHandlers) ListSessions(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	writeData(w, http.StatusOK, sessions)
+	out := make([]sessionResponse, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, toSessionResponse(s))
+	}
+	writeData(w, http.StatusOK, out)
 }
 
 func (h *AuthHandlers) RevokeSession(w http.ResponseWriter, r *http.Request) {

@@ -35,15 +35,15 @@ var emailRegexp = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 
 // RegistrationRequest is the set of required registration fields.
 type RegistrationRequest struct {
-	Email       string
-	Password    string
-	FirstName   string
-	LastName    string
-	LegalName   string
-	Country     string
-	PostalCode  string
-	State       string
-	City        string
+	Email        string
+	Password     string
+	FirstName    string
+	LastName     string
+	LegalName    string
+	Country      string
+	PostalCode   string
+	State        string
+	City         string
 	AddressLine1 string
 	AddressLine2 string
 }
@@ -90,11 +90,11 @@ type lockoutConfig struct {
 }
 
 type Options struct {
-	SessionTTL         time.Duration
-	SessionTokenLen    int
-	Argon2             auth.Params
-	LoginMaxAttempts   int
-	LoginLockWindow    time.Duration
+	SessionTTL       time.Duration
+	SessionTokenLen  int
+	Argon2           auth.Params
+	LoginMaxAttempts int
+	LoginLockWindow  time.Duration
 }
 
 func NewService(

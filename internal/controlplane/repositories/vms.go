@@ -2,11 +2,9 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -66,7 +64,7 @@ func (r *VMRepository) Create(ctx context.Context, v *models.VM) (*models.VM, er
 func (r *VMRepository) GetByID(ctx context.Context, id string) (*models.VM, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+vmCols+` FROM vms WHERE id = $1`, id)
 	v, err := scanVM(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -78,7 +76,7 @@ func (r *VMRepository) GetByID(ctx context.Context, id string) (*models.VM, erro
 func (r *VMRepository) GetByInstanceID(ctx context.Context, instanceID string) (*models.VM, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+vmCols+` FROM vms WHERE instance_id = $1`, instanceID)
 	v, err := scanVM(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -224,7 +222,7 @@ func (r *OperationRepository) Create(ctx context.Context, o *models.VMOperation)
 func (r *OperationRepository) GetByID(ctx context.Context, id string) (*models.VMOperation, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+operationCols+` FROM vm_operations WHERE id = $1`, id)
 	o, err := scanOperation(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -236,7 +234,7 @@ func (r *OperationRepository) GetByID(ctx context.Context, id string) (*models.V
 func (r *OperationRepository) GetByIdempotencyKey(ctx context.Context, key string) (*models.VMOperation, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+operationCols+` FROM vm_operations WHERE idempotency_key = $1`, key)
 	o, err := scanOperation(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

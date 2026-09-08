@@ -23,10 +23,10 @@ type Config struct {
 
 	// TLS (mTLS). When enabled, the agent presents its certificate and
 	// requires the Control Plane to present a certificate signed by the CA.
-	TLS        bool
-	CertFile   string
-	KeyFile    string
-	CAFile     string
+	TLS      bool
+	CertFile string
+	KeyFile  string
+	CAFile   string
 
 	// Heartbeat interval used when the control plane drives heartbeats.
 	HeartbeatInterval time.Duration

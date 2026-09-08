@@ -2,13 +2,11 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -94,7 +92,7 @@ func (r *UserProfileRepository) Upsert(ctx context.Context, p *models.UserProfil
 func (r *UserProfileRepository) GetByUserID(ctx context.Context, userID string) (*models.UserProfile, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+userProfileCols+` FROM user_profiles WHERE user_id = $1`, userID)
 	p, err := scanUserProfile(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

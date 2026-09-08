@@ -21,18 +21,18 @@ type DomainConfig struct {
 }
 
 type DomainDisk struct {
-	Device   string // "disk" or "cdrom"
-	Type     string // "file"
-	Source   string // volume path
-	Driver   string // "qcow2" or "raw"
+	Device    string // "disk" or "cdrom"
+	Type      string // "file"
+	Source    string // volume path
+	Driver    string // "qcow2" or "raw"
 	TargetDev string // "vda"
-	Writable bool
+	Writable  bool
 }
 
 type DomainInterface struct {
-	Bridge    string
+	Bridge     string
 	MACAddress string
-	Model     string
+	Model      string
 }
 
 // GenerateDomainXML renders a libvirt domain XML document from a DomainConfig.
@@ -74,9 +74,9 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 		Devices struct {
 			Emulator  string `xml:"emulator"`
 			DiskElems []struct {
-				Type     string `xml:"type,attr"`
-				Device   string `xml:"device,attr"`
-				Driver   struct {
+				Type   string `xml:"type,attr"`
+				Device string `xml:"device,attr"`
+				Driver struct {
 					Name  string `xml:"name,attr"`
 					Type  string `xml:"type,attr"`
 					Cache string `xml:"cache,attr"`
@@ -91,8 +91,8 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 				Readonly struct{} `xml:"readonly"`
 			} `xml:"disk"`
 			InterfaceElems []struct {
-				Type   string `xml:"type,attr"`
-				MAC    struct {
+				Type string `xml:"type,attr"`
+				MAC  struct {
 					Address string `xml:"address,attr"`
 				} `xml:"mac"`
 				Source struct {
@@ -139,9 +139,9 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 
 	for _, d := range cfg.Disks {
 		elem := struct {
-			Type     string `xml:"type,attr"`
-			Device   string `xml:"device,attr"`
-			Driver   struct {
+			Type   string `xml:"type,attr"`
+			Device string `xml:"device,attr"`
+			Driver struct {
 				Name  string `xml:"name,attr"`
 				Type  string `xml:"type,attr"`
 				Cache string `xml:"cache,attr"`
@@ -175,8 +175,8 @@ func GenerateDomainXML(cfg DomainConfig) (string, error) {
 
 	for _, nic := range cfg.Interfaces {
 		elem := struct {
-			Type   string `xml:"type,attr"`
-			MAC    struct {
+			Type string `xml:"type,attr"`
+			MAC  struct {
 				Address string `xml:"address,attr"`
 			} `xml:"mac"`
 			Source struct {

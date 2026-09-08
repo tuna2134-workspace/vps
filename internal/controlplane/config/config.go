@@ -41,11 +41,11 @@ type Config struct {
 	StripeWebhookSecret string
 
 	// TLS for Control Plane <-> Agent gRPC (mTLS)
-	TLSEnabled     bool
-	TLSCertFile    string
-	TLSKeyFile     string
-	TLSCAFile      string
-	ServerName     string
+	TLSEnabled  bool
+	TLSCertFile string
+	TLSKeyFile  string
+	TLSCAFile   string
+	ServerName  string
 	// Node heartbeat offline threshold
 	NodeOfflineAfter time.Duration
 	// Node heartbeat degraded threshold

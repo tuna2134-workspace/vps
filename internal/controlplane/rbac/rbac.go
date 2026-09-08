@@ -8,9 +8,9 @@ import (
 
 // roleRank assigns an ordering to roles for hierarchical checks.
 var roleRank = map[models.Role]int{
-	models.RoleUser:   1,
+	models.RoleUser:    1,
 	models.RoleSupport: 2,
-	models.RoleAdmin:  3,
+	models.RoleAdmin:   3,
 }
 
 // HasRole reports whether the principal holds exactly the given role.

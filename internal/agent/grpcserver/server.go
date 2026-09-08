@@ -32,10 +32,10 @@ type Server struct {
 // New builds the agent gRPC server.
 func New(mgr *manager.Manager, lv libvirt.Manager, metricsProvider *metrics.Provider, log *slog.Logger, fake bool) *Server {
 	return &Server{
-		manager: mgr,
-		libvirt: lv,
-		metrics: metricsProvider,
-		log:     log,
+		manager:  mgr,
+		libvirt:  lv,
+		metrics:  metricsProvider,
+		log:      log,
 		FakeMode: fake,
 	}
 }
@@ -175,7 +175,10 @@ func snapshotToProto(snap *metrics.Snapshot) *commonv1.NodeStatus {
 }
 
 // vmName resolves the domain name from a request (mirrors control plane).
-func vmName[T interface{ GetVmId() string; GetVmName() string }](req T) string {
+func vmName[T interface {
+	GetVmId() string
+	GetVmName() string
+}](req T) string {
 	if n := req.GetVmName(); n != "" {
 		return n
 	}

@@ -13,9 +13,9 @@ type checkoutRequest struct {
 }
 
 type subscriptionResponse struct {
-	ID              string `json:"id"`
-	Status          string `json:"status"`
-	BillingStatus   string `json:"billing_status"`
+	ID               string `json:"id"`
+	Status           string `json:"status"`
+	BillingStatus    string `json:"billing_status"`
 	CurrentPeriodEnd string `json:"current_period_end"`
 }
 

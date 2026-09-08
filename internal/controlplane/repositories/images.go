@@ -2,11 +2,9 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -51,7 +49,7 @@ func (r *ImageRepository) Create(ctx context.Context, img *models.Image) (*model
 func (r *ImageRepository) GetByID(ctx context.Context, id string) (*models.Image, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+imageCols+` FROM images WHERE id = $1`, id)
 	img, err := scanImage(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

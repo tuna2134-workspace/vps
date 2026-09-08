@@ -19,11 +19,11 @@ func newUserService(t *testing.T) *users.Service {
 	t.Helper()
 	auditSvc := audit.NewService(repos.Audit)
 	return users.NewService(repos.Users, repos.UserProfiles, repos.Sessions, repos.LoginAttempts, auditSvc, users.Options{
-		SessionTTL:        time.Hour,
-		SessionTokenLen:   32,
-		Argon2:            auth.DefaultParams,
-		LoginMaxAttempts:  5,
-		LoginLockWindow:   15 * time.Minute,
+		SessionTTL:       time.Hour,
+		SessionTokenLen:  32,
+		Argon2:           auth.DefaultParams,
+		LoginMaxAttempts: 5,
+		LoginLockWindow:  15 * time.Minute,
 	})
 }
 
@@ -35,15 +35,15 @@ func TestUserRegistrationAndLogin(t *testing.T) {
 
 	email := uniqueEmail("reg")
 	u, err := svc.Register(ctx, users.RegistrationRequest{
-		Email:       email,
-		Password:    "password123",
-		FirstName:   "Hanako",
-		LastName:    "Sato",
-		LegalName:   "Hanako Sato",
-		Country:     "JP",
-		PostalCode:  "150-0001",
-		State:       "Tokyo",
-		City:        "Shibuya",
+		Email:        email,
+		Password:     "password123",
+		FirstName:    "Hanako",
+		LastName:     "Sato",
+		LegalName:    "Hanako Sato",
+		Country:      "JP",
+		PostalCode:   "150-0001",
+		State:        "Tokyo",
+		City:         "Shibuya",
 		AddressLine1: "2-1 Dogenzaka",
 	})
 	if err != nil {

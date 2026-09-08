@@ -2,11 +2,9 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -53,7 +51,7 @@ func (r *PlanRepository) Create(ctx context.Context, p *models.Plan) (*models.Pl
 func (r *PlanRepository) GetByID(ctx context.Context, id string) (*models.Plan, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+planCols+` FROM plans WHERE id = $1`, id)
 	p, err := scanPlan(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -114,7 +112,7 @@ func (r *PlanRepository) Update(ctx context.Context, planID string, p *models.Pl
 		planID, p.Name, p.Description, p.VCPU, p.MemoryMB, p.DiskGB, p.BandwidthGB,
 		p.NetworkSpeedMbps, p.IPv4Count, p.IPv6Prefix, p.MonthlyPriceCents, p.Currency)
 	updated, err := scanPlan(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRowsOrInvalidUUID(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

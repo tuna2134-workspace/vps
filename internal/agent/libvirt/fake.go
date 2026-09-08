@@ -24,22 +24,22 @@ type fakeDomain struct {
 }
 
 type fakeVolume struct {
-	Name        string
-	Capacity    uint64
-	DataFile    string
+	Name     string
+	Capacity uint64
+	DataFile string
 }
 
 // NewFakeManager returns a FakeManager.
 func NewFakeManager() *FakeManager {
 	return &FakeManager{
-		domains: make(map[string]*fakeDomain),
-		volumes: make(map[string]*fakeVolume),
+		domains:  make(map[string]*fakeDomain),
+		volumes:  make(map[string]*fakeVolume),
 		nodeInfo: &NodeInfo{CPUs: 4, MemoryBytes: 16 << 30, Hostname: "fake-node"},
 	}
 }
 
-func (f *FakeManager) Connect() error  { return nil }
-func (f *FakeManager) Close() error    { return nil }
+func (f *FakeManager) Connect() error                     { return nil }
+func (f *FakeManager) Close() error                       { return nil }
 func (f *FakeManager) EnsurePoolActive(pool string) error { return nil }
 
 func (f *FakeManager) record(call string) {

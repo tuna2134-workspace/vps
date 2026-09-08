@@ -158,8 +158,8 @@ func (s *Service) CreateVM(ctx context.Context, userID string, req CreateRequest
 	}
 
 	op, err := s.ops.Create(ctx, &models.VMOperation{
-		VMID:          vm.ID,
-		OperationType: models.OperationCreate,
+		VMID:           vm.ID,
+		OperationType:  models.OperationCreate,
 		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
@@ -226,8 +226,8 @@ func (s *Service) NewOperation(ctx context.Context, userID, vmID string, opType 
 	}
 
 	op, err := s.ops.Create(ctx, &models.VMOperation{
-		VMID:          vm.ID,
-		OperationType: opType,
+		VMID:           vm.ID,
+		OperationType:  opType,
 		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
