@@ -282,6 +282,8 @@ type Subscription struct {
 	BillingStatus        string     `json:"billing_status"`
 	CurrentPeriodStart   *time.Time `json:"current_period_start,omitempty"`
 	CurrentPeriodEnd     *time.Time `json:"current_period_end,omitempty"`
+	SuspendedAt          *time.Time `json:"suspended_at,omitempty"`
+	TerminateAt          *time.Time `json:"terminate_at,omitempty"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 }

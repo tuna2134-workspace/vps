@@ -314,6 +314,44 @@ func (s *Service) NodeEndpoint(ctx context.Context, nodeID string) (string, erro
 	return node.AgentEndpoint, nil
 }
 
+// SuspendUserVMs gracefully shuts down all of a user's running VMs (payment
+// overdue). Already-stopped VMs are skipped.
+func (s *Service) SuspendUserVMs(ctx context.Context, userID string) error {
+	vms, err := s.ListVMs(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, vm := range vms {
+		if vm.Status != models.VMStatusRunning {
+			continue
+		}
+		if _, err := s.NewOperation(ctx, userID, vm.ID, models.OperationStop, ""); err != nil {
+			// A VM that just changed state may reject the transition; the
+			// suspension deadline still applies, so do not fail the batch.
+			continue
+		}
+	}
+	return nil
+}
+
+// TerminateUserVMs schedules termination of all of a user's VMs (grace period
+// expired or subscription canceled).
+func (s *Service) TerminateUserVMs(ctx context.Context, userID string) error {
+	vms, err := s.ListVMs(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, vm := range vms {
+		if vm.Status == models.VMStatusTerminated {
+			continue
+		}
+		if _, err := s.NewOperation(ctx, userID, vm.ID, models.OperationTerminate, ""); err != nil {
+			continue
+		}
+	}
+	return nil
+}
+
 // WaitForOperation polls until the operation reaches a terminal state or the
 // context expires.
 func (s *Service) WaitForOperation(ctx context.Context, operationID string) (*models.VMOperation, error) {

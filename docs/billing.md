@@ -16,14 +16,22 @@ Billing uses Stripe (`stripe-go/v81`).
 ## Lifecycle integration
 
 ```text
-Payment successful       -> provision VPS (billing gate opens)
-Payment failed           -> mark billing_state past_due -> grace -> suspend VPS
-Subscription canceled    -> terminate or schedule termination
+Payment successful       -> subscription active (billing gate opens)
+Payment failed           -> subscription suspended; VMs shut down immediately
+                           -> grace period (default 7 days)
+                           -> debt settled: subscription reactivated (VMs stay off)
+                           -> grace period expires: VMs terminated automatically
+Subscription canceled    -> all of the user's VMs terminated
 ```
 
 The webhook handler is synchronous and fast; long-running side effects (VM
-provisioning, suspension) are delegated to the operation worker via callbacks,
+suspension, termination) are delegated to the operation worker via callbacks,
 so Stripe never waits on virtualization work.
+
+A background sweeper (`billingSweeper`) runs every `BILLING_SWEEP_INTERVAL`
+(default 1h) and terminates the VMs of any subscription that is still
+`suspended` after `BILLING_GRACE_PERIOD` (default `168h` = 7 days). The
+subscription records `suspended_at` / `terminate_at` to drive this.
 
 ## Webhook security
 
@@ -45,8 +53,10 @@ so billing can be extended (trial, credits) without touching provisioning.
 ## Configuration
 
 ```text
-STRIPE_SECRET_KEY      sk_test_...
-STRIPE_WEBHOOK_SECRET  whsec_...
+STRIPE_SECRET_KEY       sk_test_...
+STRIPE_WEBHOOK_SECRET   whsec_...
+BILLING_GRACE_PERIOD    168h    # overdue grace period before VM termination
+BILLING_SWEEP_INTERVAL  1h      # how often the termination sweeper runs
 ```
 
 Never commit secrets. See `.env.example`.

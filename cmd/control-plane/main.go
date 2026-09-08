@@ -139,16 +139,49 @@ func run(log *slog.Logger) error {
 	vmSvc := vms.NewService(repos.VMs, repos.Operations, repos.Nodes, repos.Plans, networkSvc, sched, macGen, auditSvc, provisioner, billingGate)
 
 	// Wire billing lifecycle callbacks into VM lifecycle.
+	//
+	// Payment failed (invoice.payment_failed / subscription past_due):
+	// suspend the subscription and shut down all of the user's VMs. A
+	// background sweeper terminates them after the grace period.
+	billingSvc.OnPaymentFailed = func(ctx context.Context, userID string) error {
+		sub, err := repos.Billing.GetSubscriptionByUser(ctx, userID)
+		if err != nil {
+			if errors.Is(err, repositories.ErrNotFound) {
+				return nil
+			}
+			return err
+		}
+		terminateAt := time.Now().Add(cfg.BillingGracePeriod)
+		if err := repos.Billing.SetSubscriptionSuspended(ctx, sub.StripeSubscriptionID, terminateAt); err != nil {
+			log.Error("mark subscription suspended failed", "user", userID, "error", err)
+			return err
+		}
+		log.Warn("payment failed; suspending VMs",
+			"user", userID, "terminate_at", terminateAt.Format(time.RFC3339))
+		return vmSvc.SuspendUserVMs(ctx, userID)
+	}
+
+	// Payment recovered: reactivate the subscription and clear the termination
+	// deadline (VMs stay off until the user starts them).
+	billingSvc.OnSubscriptionActive = func(ctx context.Context, userID string) error {
+		sub, err := repos.Billing.GetSubscriptionByUser(ctx, userID)
+		if err != nil {
+			if errors.Is(err, repositories.ErrNotFound) {
+				return nil
+			}
+			return err
+		}
+		log.Info("subscription active", "user", userID)
+		return repos.Billing.SetSubscriptionActive(ctx, sub.StripeSubscriptionID)
+	}
+
 	billingSvc.OnSubscriptionCanceled = func(ctx context.Context, stripeSubID string) error {
 		sub, err := repos.Billing.GetSubscriptionByStripeID(ctx, stripeSubID)
 		if err != nil {
 			return err
 		}
-		if sub.VMID != "" {
-			_, err := vmSvc.NewOperation(ctx, sub.UserID, sub.VMID, models.OperationTerminate, "")
-			return err
-		}
-		return nil
+		log.Warn("subscription canceled; terminating VMs", "user", sub.UserID)
+		return vmSvc.TerminateUserVMs(ctx, sub.UserID)
 	}
 
 	// --- HTTP API ---
@@ -182,6 +215,7 @@ func run(log *slog.Logger) error {
 	go nodeHeartbeatPoller(ctx, clusterSvc, agentFactory, cfg, log)
 	go nodeStatusReconciler(ctx, clusterSvc, log)
 	go sessionJanitor(ctx, repos.Sessions, log)
+	go billingSweeper(ctx, vmSvc, repos.Billing, cfg.BillingSweepInterval, log)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -278,6 +312,38 @@ func sessionJanitor(ctx context.Context, sessions *repositories.SessionRepositor
 				log.Warn("session janitor failed", "error", err)
 			} else if n > 0 {
 				log.Info("expired sessions cleaned", "count", n)
+			}
+		}
+	}
+}
+
+// billingSweeper periodically terminates VMs whose subscription has been
+// suspended (payment overdue) and whose grace period has expired.
+func billingSweeper(ctx context.Context, vmSvc *vms.Service, billing *repositories.BillingRepository, interval time.Duration, log *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			due, err := billing.ListSuspendedDueForTermination(ctx, time.Now())
+			if err != nil {
+				log.Warn("billing sweeper query failed", "error", err)
+				continue
+			}
+			for _, sub := range due {
+				log.Warn("billing grace period expired; terminating VMs",
+					"user", sub.UserID, "subscription", sub.StripeSubscriptionID,
+					"terminate_at", sub.TerminateAt)
+				if err := vmSvc.TerminateUserVMs(ctx, sub.UserID); err != nil {
+					log.Warn("terminate overdue VMs failed", "user", sub.UserID, "error", err)
+					continue
+				}
+				// Mark the subscription terminated so it is not swept again.
+				if err := billing.SetSubscriptionBillingStatus(ctx, sub.StripeSubscriptionID, "canceled"); err != nil {
+					log.Warn("mark overdue subscription canceled failed", "error", err)
+				}
 			}
 		}
 	}

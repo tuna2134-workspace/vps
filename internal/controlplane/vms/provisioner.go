@@ -149,7 +149,7 @@ func (p *Provisioner) process(ctx context.Context, job ProvisionJob) {
 	switch op.OperationType {
 	case models.OperationCreate:
 		err = p.createVM(ctx, op)
-	case models.OperationDelete:
+	case models.OperationDelete, models.OperationTerminate:
 		err = p.deleteVM(ctx, op)
 	case models.OperationStart:
 		err = p.startVM(ctx, op)

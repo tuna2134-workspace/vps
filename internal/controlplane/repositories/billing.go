@@ -3,6 +3,9 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
@@ -13,6 +16,26 @@ type BillingRepository struct {
 
 func NewBillingRepository(db DBTX) *BillingRepository {
 	return &BillingRepository{db: db}
+}
+
+const subscriptionCols = `id, user_id, vm_id, plan_id, stripe_subscription_id, status, billing_status,
+	current_period_start, current_period_end, suspended_at, terminate_at, created_at, updated_at`
+
+func scanSubscription(row pgx.Row) (*models.Subscription, error) {
+	var s models.Subscription
+	var vmID, planID *string
+	if err := row.Scan(&s.ID, &s.UserID, &vmID, &planID, &s.StripeSubscriptionID,
+		&s.Status, &s.BillingStatus, &s.CurrentPeriodStart, &s.CurrentPeriodEnd,
+		&s.SuspendedAt, &s.TerminateAt, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if vmID != nil {
+		s.VMID = *vmID
+	}
+	if planID != nil {
+		s.PlanID = *planID
+	}
+	return &s, nil
 }
 
 func (r *BillingRepository) UpsertCustomer(ctx context.Context, userID, stripeCustomerID string) (*models.BillingCustomer, error) {
@@ -60,81 +83,47 @@ func (r *BillingRepository) GetUserByStripeCustomer(ctx context.Context, stripeC
 func (r *BillingRepository) UpsertSubscription(ctx context.Context, s *models.Subscription) (*models.Subscription, error) {
 	row := r.db.QueryRow(ctx, `
 		INSERT INTO subscriptions (user_id, vm_id, plan_id, stripe_subscription_id, status, billing_status,
-			current_period_start, current_period_end)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			current_period_start, current_period_end, suspended_at, terminate_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (stripe_subscription_id) DO UPDATE SET
 			status = EXCLUDED.status,
 			billing_status = EXCLUDED.billing_status,
 			current_period_start = EXCLUDED.current_period_start,
 			current_period_end = EXCLUDED.current_period_end,
 			vm_id = EXCLUDED.vm_id,
+			suspended_at = EXCLUDED.suspended_at,
+			terminate_at = EXCLUDED.terminate_at,
 			updated_at = now()
-		RETURNING id, user_id, vm_id, plan_id, stripe_subscription_id, status, billing_status,
-			current_period_start, current_period_end, created_at, updated_at`,
-		s.UserID, s.VMID, s.PlanID, s.StripeSubscriptionID, s.Status, s.BillingStatus,
-		s.CurrentPeriodStart, s.CurrentPeriodEnd)
-	var out models.Subscription
-	var vmID, planID *string
-	if err := row.Scan(&out.ID, &out.UserID, &vmID, &planID, &out.StripeSubscriptionID,
-		&out.Status, &out.BillingStatus, &out.CurrentPeriodStart, &out.CurrentPeriodEnd,
-		&out.CreatedAt, &out.UpdatedAt); err != nil {
-		return nil, fmt.Errorf("upsert subscription: %w", err)
-	}
-	if vmID != nil {
-		out.VMID = *vmID
-	}
-	if planID != nil {
-		out.PlanID = *planID
-	}
-	return &out, nil
+		RETURNING `+subscriptionCols,
+		s.UserID, nullableID(s.VMID), nullableID(s.PlanID), s.StripeSubscriptionID, s.Status, s.BillingStatus,
+		s.CurrentPeriodStart, s.CurrentPeriodEnd, s.SuspendedAt, s.TerminateAt)
+	return scanSubscription(row)
 }
 
 func (r *BillingRepository) GetSubscriptionByStripeID(ctx context.Context, stripeSubID string) (*models.Subscription, error) {
 	row := r.db.QueryRow(ctx, `
-		SELECT id, user_id, vm_id, plan_id, stripe_subscription_id, status, billing_status,
-			current_period_start, current_period_end, created_at, updated_at
-		FROM subscriptions WHERE stripe_subscription_id = $1`, stripeSubID)
-	var s models.Subscription
-	var vmID, planID *string
-	if err := row.Scan(&s.ID, &s.UserID, &vmID, &planID, &s.StripeSubscriptionID,
-		&s.Status, &s.BillingStatus, &s.CurrentPeriodStart, &s.CurrentPeriodEnd,
-		&s.CreatedAt, &s.UpdatedAt); err != nil {
-		if isNoRowsOrInvalidUUID(err) {
-			return nil, ErrNotFound
-		}
+		SELECT `+subscriptionCols+` FROM subscriptions WHERE stripe_subscription_id = $1`, stripeSubID)
+	s, err := scanSubscription(row)
+	if isNoRowsOrInvalidUUID(err) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
 		return nil, fmt.Errorf("get subscription: %w", err)
 	}
-	if vmID != nil {
-		s.VMID = *vmID
-	}
-	if planID != nil {
-		s.PlanID = *planID
-	}
-	return &s, nil
+	return s, nil
 }
 
 func (r *BillingRepository) GetSubscriptionByUser(ctx context.Context, userID string) (*models.Subscription, error) {
 	row := r.db.QueryRow(ctx, `
-		SELECT id, user_id, vm_id, plan_id, stripe_subscription_id, status, billing_status,
-			current_period_start, current_period_end, created_at, updated_at
-		FROM subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, userID)
-	var s models.Subscription
-	var vmID, planID *string
-	if err := row.Scan(&s.ID, &s.UserID, &vmID, &planID, &s.StripeSubscriptionID,
-		&s.Status, &s.BillingStatus, &s.CurrentPeriodStart, &s.CurrentPeriodEnd,
-		&s.CreatedAt, &s.UpdatedAt); err != nil {
-		if isNoRowsOrInvalidUUID(err) {
-			return nil, ErrNotFound
-		}
+		SELECT `+subscriptionCols+` FROM subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, userID)
+	s, err := scanSubscription(row)
+	if isNoRowsOrInvalidUUID(err) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
 		return nil, fmt.Errorf("get subscription by user: %w", err)
 	}
-	if vmID != nil {
-		s.VMID = *vmID
-	}
-	if planID != nil {
-		s.PlanID = *planID
-	}
-	return &s, nil
+	return s, nil
 }
 
 func (r *BillingRepository) SetSubscriptionBillingStatus(ctx context.Context, stripeSubID, status string) error {
@@ -145,6 +134,57 @@ func (r *BillingRepository) SetSubscriptionBillingStatus(ctx context.Context, st
 		return fmt.Errorf("set subscription billing status: %w", err)
 	}
 	return nil
+}
+
+// SetSubscriptionSuspended marks a subscription as suspended (payment
+// overdue) and schedules VM termination after the grace period.
+func (r *BillingRepository) SetSubscriptionSuspended(ctx context.Context, stripeSubID string, terminateAt time.Time) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE subscriptions
+		SET billing_status = 'suspended',
+		    suspended_at = coalesce(suspended_at, now()),
+		    terminate_at = $2,
+		    updated_at = now()
+		WHERE stripe_subscription_id = $1`, stripeSubID, terminateAt)
+	if err != nil {
+		return fmt.Errorf("set subscription suspended: %w", err)
+	}
+	return nil
+}
+
+// SetSubscriptionActive clears a suspension when the debt is settled.
+func (r *BillingRepository) SetSubscriptionActive(ctx context.Context, stripeSubID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE subscriptions
+		SET billing_status = 'active', suspended_at = NULL, terminate_at = NULL, updated_at = now()
+		WHERE stripe_subscription_id = $1`, stripeSubID)
+	if err != nil {
+		return fmt.Errorf("set subscription active: %w", err)
+	}
+	return nil
+}
+
+// ListSuspendedDueForTermination returns suspended subscriptions whose grace
+// period has expired (terminate_at <= now).
+func (r *BillingRepository) ListSuspendedDueForTermination(ctx context.Context, now time.Time) ([]models.Subscription, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT `+subscriptionCols+`
+		FROM subscriptions
+		WHERE billing_status = 'suspended' AND terminate_at IS NOT NULL AND terminate_at <= $1
+		ORDER BY terminate_at`, now)
+	if err != nil {
+		return nil, fmt.Errorf("list suspended due for termination: %w", err)
+	}
+	defer rows.Close()
+	var out []models.Subscription
+	for rows.Next() {
+		s, err := scanSubscription(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
 }
 
 func (r *BillingRepository) InsertInvoice(ctx context.Context, inv *models.Invoice) (*models.Invoice, error) {

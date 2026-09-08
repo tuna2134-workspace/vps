@@ -40,6 +40,10 @@ type Config struct {
 	StripeSecretKey     string
 	StripeWebhookSecret string
 
+	// Billing suspension / grace period
+	BillingGracePeriod   time.Duration
+	BillingSweepInterval time.Duration
+
 	// TLS for Control Plane <-> Agent gRPC (mTLS)
 	TLSEnabled  bool
 	TLSCertFile string
@@ -129,6 +133,9 @@ func Load() (*Config, error) {
 
 		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
+
+		BillingGracePeriod:   getenvDuration("BILLING_GRACE_PERIOD", 7*24*time.Hour),
+		BillingSweepInterval: getenvDuration("BILLING_SWEEP_INTERVAL", time.Hour),
 
 		TLSEnabled:        getenvBool("TLS_ENABLED", false),
 		TLSCertFile:       getenv("TLS_CERT_FILE", ""),
