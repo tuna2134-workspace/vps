@@ -282,35 +282,3 @@ func (s *Service) WaitForOperation(ctx context.Context, operationID string) (*mo
 		}
 	}
 }
-
-// GetProvisioningDetails returns a provisioning-ready snapshot for the agent.
-func (s *Service) GetProvisioningDetails(ctx context.Context, vmID string) (*ProvisionRequest, error) {
-	vm, err := s.vms.GetByID(ctx, vmID)
-	if err != nil {
-		return nil, err
-	}
-	node, err := s.getNode(ctx, vm.NodeID)
-	if err != nil {
-		return nil, err
-	}
-	allocations, err := s.networks.AllocationsByVM(ctx, vmID)
-	if err != nil {
-		return nil, err
-	}
-	image, err := s.getImage(ctx, vm.ImageID)
-	if err != nil {
-		return nil, err
-	}
-	net, err := s.getNetwork(ctx, vm.NetworkID)
-	if err != nil {
-		return nil, err
-	}
-	return &ProvisionRequest{
-		VM:        vm,
-		Node:      node,
-		Allocations: allocations,
-		Image:     image,
-		Network:   net,
-		SSHKeys:   nil,
-	}, nil
-}
