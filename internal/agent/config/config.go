@@ -28,6 +28,11 @@ type Config struct {
 	KeyFile  string
 	CAFile   string
 
+	// AuthToken is a shared secret that callers must present (Bearer token)
+	// on every RPC. This is the defense-in-depth layer that protects the
+	// agent even when TLS is disabled.
+	AuthToken string
+
 	// Heartbeat interval used when the control plane drives heartbeats.
 	HeartbeatInterval time.Duration
 }
@@ -72,6 +77,7 @@ func Load() *Config {
 		CertFile:          getenv("AGENT_TLS_CERT_FILE", ""),
 		KeyFile:           getenv("AGENT_TLS_KEY_FILE", ""),
 		CAFile:            getenv("AGENT_TLS_CA_FILE", ""),
+		AuthToken:         getenv("AGENT_AUTH_TOKEN", ""),
 		HeartbeatInterval: getenvDuration("AGENT_HEARTBEAT_INTERVAL", 15*time.Second),
 	}
 }

@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/tuna2134/vps/internal/controlplane/console"
 	"github.com/tuna2134/vps/internal/controlplane/vms"
 )
@@ -32,61 +34,46 @@ func NewConsoleHandlers(consoleSvc *console.Service, vmSvc *vms.Service) *Consol
 // returns a one-time, expiring token plus the websocket URL a noVNC or serial
 // client connects to. The agent's console endpoint is never returned to the
 // user.
-func (h *ConsoleHandlers) IssueVMConsole(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	vmID := pathSegment(r, "/v1/vms/")
-	if idx := indexLastSlash(vmID); idx >= 0 {
-		vmID = vmID[:idx]
-	}
-	vm, err := h.vms.GetVM(r.Context(), u.ID, vmID)
+func (h *ConsoleHandlers) IssueVMConsole(c *gin.Context) {
+	u := UserFrom(c)
+	vm, err := h.vms.GetVM(c.Request.Context(), u.ID, c.Param("id"))
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
 	if vm.Status != "running" {
-		writeError(w, http.StatusConflict, "INVALID_STATE", "vm must be running to open a console")
+		writeError(c, http.StatusConflict, "INVALID_STATE", "vm must be running to open a console")
 		return
 	}
 
 	consoleType := console.TypeVNC
-	if r.Body != nil {
-		var req consoleRequest
-		if err := decodeJSON(r, &req); err == nil && req.ConsoleType != "" {
-			consoleType = req.ConsoleType
-		}
+	var req consoleRequest
+	if err := decodeJSON(c, &req); err == nil && req.ConsoleType != "" {
+		consoleType = req.ConsoleType
 	}
 	if consoleType != console.TypeVNC && consoleType != console.TypeSerial {
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "console_type must be vnc or serial")
+		writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", "console_type must be vnc or serial")
 		return
 	}
 
-	nodeEndpoint, err := h.vms.NodeEndpoint(r.Context(), vm.NodeID)
+	nodeEndpoint, err := h.vms.NodeEndpoint(c.Request.Context(), vm.NodeID)
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
 
 	// The console token must carry the libvirt DOMAIN name (vps-<instance-id>),
 	// not the VM's display name, so the agent can open the right domain.
-	tok, rawToken, err := h.console.Issue(r.Context(), u.ID, vm.ID, vms.DomainName(vm), nodeEndpoint, consoleType)
+	tok, rawToken, err := h.console.Issue(c.Request.Context(), u.ID, vm.ID, vms.DomainName(vm), nodeEndpoint, consoleType)
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
 	wsURL := h.console.WebsocketURL(h.console.BaseURL(), rawToken)
-	writeData(w, http.StatusOK, consoleResponse{
+	writeData(c, http.StatusOK, consoleResponse{
 		ConsoleType:  tok.ConsoleType,
 		Token:        rawToken,
 		ExpiresAt:    tok.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
 		WebsocketURL: wsURL,
 	})
-}
-
-func indexLastSlash(s string) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == '/' {
-			return i
-		}
-	}
-	return -1
 }

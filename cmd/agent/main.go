@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/tuna2134/vps/internal/agent/auth"
 	"github.com/tuna2134/vps/internal/agent/config"
 	"github.com/tuna2134/vps/internal/agent/grpcserver"
 	"github.com/tuna2134/vps/internal/agent/image"
@@ -26,6 +27,7 @@ import (
 	"github.com/tuna2134/vps/internal/agent/manager"
 	"github.com/tuna2134/vps/internal/agent/metrics"
 	"github.com/tuna2134/vps/internal/agent/network"
+	"github.com/tuna2134/vps/internal/agent/operations"
 	"github.com/tuna2134/vps/internal/agent/storage"
 	agentv1 "github.com/tuna2134/vps/proto/gen/agent/v1"
 )
@@ -73,7 +75,15 @@ func run(log *slog.Logger) error {
 
 	mgr := manager.New(lv, store, ipt, fetcher, cfg.WorkDir, cfg.StoragePool, log)
 	metricsProvider := metrics.NewProvider(lv)
-	server := grpcserver.New(mgr, lv, metricsProvider, log)
+
+	opStore, err := operations.OpenBolt(filepath.Join(cfg.WorkDir, "operations.db"))
+	if err != nil {
+		return err
+	}
+	defer opStore.Close()
+	opSvc := operations.NewService(opStore)
+
+	server := grpcserver.New(mgr, lv, metricsProvider, opSvc, log)
 
 	opts := []grpc.ServerOption{}
 	if cfg.TLS {
@@ -83,6 +93,8 @@ func run(log *slog.Logger) error {
 		}
 		opts = append(opts, grpc.Creds(creds))
 	}
+	opts = append(opts, auth.Interceptors(cfg.AuthToken)...)
+	auth.LogWarning(log, cfg.AuthToken, cfg.TLS)
 
 	grpcServer := grpc.NewServer(opts...)
 	agentv1.RegisterAgentServiceServer(grpcServer, server)

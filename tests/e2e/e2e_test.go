@@ -141,10 +141,10 @@ func setupE2E(t *testing.T) *e2eTest {
 	factory := agents.NewFactory(grpcclient.Options{Timeout: 5 * time.Second})
 
 	catalog := vms.NewCatalog(pool.VMs, pool.Nodes, pool.Images, netSvc, pool.Networks, pool.IPPools)
-	provisioner := vms.NewProvisioner(pool.Operations, pool.VMs, catalog, agents.AgentFactoryFunc(factory), 10*time.Second, log)
+	provisioner := vms.NewProvisioner(pool.Operations, pool.VMs, catalog, agents.AgentFactoryFunc(factory), pool.Reservations, 10*time.Second, log)
 	provisioner.Start(2)
 
-	sched := scheduler.New(pool.Nodes, pool.VMs)
+	sched := scheduler.New(pool.Nodes, pool.VMs, pool.Reservations)
 	macGen := macalloc.NewGenerator(pool.VMs)
 	billingSvc := billing.NewService("", "", pool.Billing, auditSvc, log)
 
@@ -164,7 +164,7 @@ func setupE2E(t *testing.T) *e2eTest {
 		t.Fatalf("register node: %v", err)
 	}
 	// Mark the node healthy so the scheduler picks it.
-	if err := pool.Nodes.UpdateHeartbeat(ctx, node.ID, 16, 32768, 200, 10, 10); err != nil {
+	if err := pool.Nodes.UpdateHeartbeat(ctx, node.ID, 16, 32768, 200, 100*1024*1024*1024, 10, 10); err != nil {
 		t.Fatalf("update heartbeat: %v", err)
 	}
 

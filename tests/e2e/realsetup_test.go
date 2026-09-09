@@ -103,7 +103,7 @@ func newRealLibvirtEnv(t *testing.T) *realLibvirtEnv {
 	mgr := manager.New(adapter, store, nil, image.New(env.workDir), env.workDir, env.poolName, log)
 	metricsProvider := metrics.NewProvider(adapter)
 	env.mgr = mgr
-	env.agentServer = grpcserver.New(mgr, adapter, metricsProvider, log)
+	env.agentServer = grpcserver.New(mgr, adapter, metricsProvider, nil, log)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

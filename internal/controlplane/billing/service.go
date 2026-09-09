@@ -129,21 +129,12 @@ func (s *Service) upsertSubscription(ctx context.Context, userID string, sub *st
 		periodEnd = &t
 	}
 	status := string(sub.Status)
-	billingStatus := "active"
-	switch sub.Status {
-	case stripe.SubscriptionStatusPastDue:
-		billingStatus = "past_due"
-	case stripe.SubscriptionStatusUnpaid:
-		billingStatus = "unpaid"
-	case stripe.SubscriptionStatusCanceled:
-		billingStatus = "canceled"
-	}
 	saved, err := s.repo.UpsertSubscription(ctx, &models.Subscription{
 		UserID:               userID,
 		VMID:                 vmID,
 		StripeSubscriptionID: sub.ID,
 		Status:               status,
-		BillingStatus:        billingStatus,
+		BillingStatus:        billingStatusFor(sub.Status),
 		CurrentPeriodStart:   periodStart,
 		CurrentPeriodEnd:     periodEnd,
 	})
@@ -173,12 +164,12 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signatureHe
 		return false, fmt.Errorf("invalid stripe webhook signature: %w", err)
 	}
 
-	// Idempotency: skip events already processed.
-	processed, err := s.repo.MarkWebhookProcessed(ctx, event.ID, string(event.Type))
+	// Skip events already processed.
+	already, err := s.repo.IsWebhookProcessed(ctx, event.ID)
 	if err != nil {
 		return false, err
 	}
-	if !processed {
+	if already {
 		s.log.Info("stripe webhook already processed", "event_id", event.ID)
 		return false, nil
 	}
@@ -201,7 +192,15 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signatureHe
 		s.log.Info("stripe webhook ignored", "type", event.Type)
 	}
 	if err != nil {
+		// Leave the event unmarked so Stripe retries it on the next delivery.
 		return true, fmt.Errorf("process stripe event %s: %w", event.Type, err)
+	}
+
+	// Mark processed only AFTER successful processing. Marking first would
+	// permanently drop events that fail transiently (Stripe would ack them as
+	// duplicates on retry, losing the side effect).
+	if _, err := s.repo.MarkWebhookProcessed(ctx, event.ID, string(event.Type)); err != nil {
+		return false, err
 	}
 	_ = s.audit.Record(ctx, audit.Event{
 		Action:       "billing.webhook",
@@ -368,6 +367,24 @@ func unixTime(t int64) *time.Time {
 	}
 	tm := time.Unix(t, 0).UTC()
 	return &tm
+}
+
+// billingStatusFor maps a Stripe subscription status onto the local billing
+// status. Only active (or trialing) subscriptions report "active"; any other
+// state — including incomplete, incomplete_expired, paused, unpaid, past_due,
+// canceled — must NOT enable VM compute, otherwise a user whose payment was
+// never collected could create VMs for free.
+func billingStatusFor(st stripe.SubscriptionStatus) string {
+	switch st {
+	case stripe.SubscriptionStatusActive, stripe.SubscriptionStatusTrialing:
+		return "active"
+	case stripe.SubscriptionStatusPastDue:
+		return "past_due"
+	case stripe.SubscriptionStatusCanceled, stripe.SubscriptionStatusIncompleteExpired:
+		return "canceled"
+	default: // incomplete, paused, unpaid, unknown states
+		return "unpaid"
+	}
 }
 
 func jsonUnmarshal(data []byte, v any) error {

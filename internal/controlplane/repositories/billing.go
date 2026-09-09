@@ -253,6 +253,17 @@ func (r *BillingRepository) GetPaymentByIntentID(ctx context.Context, intentID s
 	return &p, nil
 }
 
+// IsWebhookProcessed reports whether a Stripe event id was already processed.
+func (r *BillingRepository) IsWebhookProcessed(ctx context.Context, stripeEventID string) (bool, error) {
+	var exists bool
+	if err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM webhook_events WHERE stripe_event_id = $1)`,
+		stripeEventID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check webhook processed: %w", err)
+	}
+	return exists, nil
+}
+
 // MarkWebhookProcessed records a Stripe event id so it is never processed twice.
 // Returns false if the event was already processed (idempotent).
 func (r *BillingRepository) MarkWebhookProcessed(ctx context.Context, stripeEventID, eventType string) (bool, error) {

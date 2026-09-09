@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/tuna2134/vps/internal/controlplane/models"
 	"github.com/tuna2134/vps/internal/controlplane/plans"
 )
@@ -29,35 +31,35 @@ func NewPlanHandlers(planSvc *plans.Service) *PlanHandlers {
 	return &PlanHandlers{plans: planSvc}
 }
 
-func (h *PlanHandlers) List(w http.ResponseWriter, r *http.Request) {
-	p, err := h.plans.List(r.Context(), r.URL.Query().Get("active") != "false")
+func (h *PlanHandlers) List(c *gin.Context) {
+	p, err := h.plans.List(c.Request.Context(), c.Query("active") != "false")
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, p)
+	writeData(c, http.StatusOK, p)
 }
 
-func (h *PlanHandlers) Get(w http.ResponseWriter, r *http.Request) {
-	p, err := h.plans.Get(r.Context(), pathSegment(r, "/v1/plans/"))
+func (h *PlanHandlers) Get(c *gin.Context) {
+	p, err := h.plans.Get(c.Request.Context(), c.Param("id"))
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, p)
+	writeData(c, http.StatusOK, p)
 }
 
-func (h *PlanHandlers) Create(w http.ResponseWriter, r *http.Request) {
+func (h *PlanHandlers) Create(c *gin.Context) {
 	var req planRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	if req.Name == "" || req.VCPU <= 0 || req.MemoryMB <= 0 || req.DiskGB <= 0 {
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "name, vcpu, memory_mb and disk_gb are required")
+		writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", "name, vcpu, memory_mb and disk_gb are required")
 		return
 	}
-	created, err := h.plans.Create(r.Context(), &models.Plan{
+	created, err := h.plans.Create(c.Request.Context(), &models.Plan{
 		Name:              req.Name,
 		Description:       req.Description,
 		VCPU:              req.VCPU,
@@ -71,20 +73,20 @@ func (h *PlanHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		Currency:          req.Currency,
 	})
 	if err != nil {
-		mapServiceError(w, err)
+		mapServiceError(c, err)
 		return
 	}
-	writeData(w, http.StatusCreated, created)
+	writeData(c, http.StatusCreated, created)
 }
 
-func (h *PlanHandlers) Update(w http.ResponseWriter, r *http.Request) {
-	planID := pathSegment(r, "/v1/plans/")
+func (h *PlanHandlers) Update(c *gin.Context) {
+	planID := c.Param("id")
 	var req planRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
-	updated, err := h.plans.Update(r.Context(), planID, &models.Plan{
+	updated, err := h.plans.Update(c.Request.Context(), planID, &models.Plan{
 		Name:              req.Name,
 		Description:       req.Description,
 		VCPU:              req.VCPU,
@@ -98,27 +100,27 @@ func (h *PlanHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		Currency:          req.Currency,
 	})
 	if err != nil {
-		mapServiceError(w, err)
+		mapServiceError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, updated)
+	writeData(c, http.StatusOK, updated)
 }
 
-func (h *PlanHandlers) SetActive(w http.ResponseWriter, r *http.Request) {
-	planID := pathSegment(r, "/v1/plans/")
-	if err := h.plans.SetActive(r.Context(), planID, r.URL.Query().Get("active") != "false"); err != nil {
-		mapServiceError(w, err)
+func (h *PlanHandlers) SetActive(c *gin.Context) {
+	planID := c.Param("id")
+	if err := h.plans.SetActive(c.Request.Context(), planID, c.Query("active") != "false"); err != nil {
+		mapServiceError(c, err)
 		return
 	}
-	writeEmpty(w)
+	writeEmpty(c)
 }
 
-func (h *PlanHandlers) ListVersions(w http.ResponseWriter, r *http.Request) {
-	planID := pathSegment(r, "/v1/plans/")
-	versions, err := h.plans.ListVersions(r.Context(), planID)
+func (h *PlanHandlers) ListVersions(c *gin.Context) {
+	planID := c.Param("id")
+	versions, err := h.plans.ListVersions(c.Request.Context(), planID)
 	if err != nil {
-		mapServiceError(w, err)
+		mapServiceError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, versions)
+	writeData(c, http.StatusOK, versions)
 }

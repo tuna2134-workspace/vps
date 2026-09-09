@@ -26,6 +26,7 @@ const (
 	AgentService_ForceStopVM_FullMethodName   = "/agent.v1.AgentService/ForceStopVM"
 	AgentService_RebootVM_FullMethodName      = "/agent.v1.AgentService/RebootVM"
 	AgentService_GetVM_FullMethodName         = "/agent.v1.AgentService/GetVM"
+	AgentService_ListVMs_FullMethodName       = "/agent.v1.AgentService/ListVMs"
 	AgentService_GetNodeStatus_FullMethodName = "/agent.v1.AgentService/GetNodeStatus"
 	AgentService_Heartbeat_FullMethodName     = "/agent.v1.AgentService/Heartbeat"
 	AgentService_Console_FullMethodName       = "/agent.v1.AgentService/Console"
@@ -54,6 +55,9 @@ type AgentServiceClient interface {
 	RebootVM(ctx context.Context, in *RebootVMRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	// GetVM returns the current status of a VM.
 	GetVM(ctx context.Context, in *GetVMRequest, opts ...grpc.CallOption) (*VMResponse, error)
+	// ListVMs lists every domain on this node with its actual runtime state. It
+	// is used by the Control Plane to reconcile DB state with libvirt reality.
+	ListVMs(ctx context.Context, in *ListVMsRequest, opts ...grpc.CallOption) (*ListVMsResponse, error)
 	// GetNodeStatus returns node resource usage and health.
 	GetNodeStatus(ctx context.Context, in *GetNodeStatusRequest, opts ...grpc.CallOption) (*NodeStatusResponse, error)
 	// Heartbeat is periodically called by the Control Plane to check liveness
@@ -144,6 +148,16 @@ func (c *agentServiceClient) GetVM(ctx context.Context, in *GetVMRequest, opts .
 	return out, nil
 }
 
+func (c *agentServiceClient) ListVMs(ctx context.Context, in *ListVMsRequest, opts ...grpc.CallOption) (*ListVMsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVMsResponse)
+	err := c.cc.Invoke(ctx, AgentService_ListVMs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentServiceClient) GetNodeStatus(ctx context.Context, in *GetNodeStatusRequest, opts ...grpc.CallOption) (*NodeStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NodeStatusResponse)
@@ -200,6 +214,9 @@ type AgentServiceServer interface {
 	RebootVM(context.Context, *RebootVMRequest) (*OperationResponse, error)
 	// GetVM returns the current status of a VM.
 	GetVM(context.Context, *GetVMRequest) (*VMResponse, error)
+	// ListVMs lists every domain on this node with its actual runtime state. It
+	// is used by the Control Plane to reconcile DB state with libvirt reality.
+	ListVMs(context.Context, *ListVMsRequest) (*ListVMsResponse, error)
 	// GetNodeStatus returns node resource usage and health.
 	GetNodeStatus(context.Context, *GetNodeStatusRequest) (*NodeStatusResponse, error)
 	// Heartbeat is periodically called by the Control Plane to check liveness
@@ -240,6 +257,9 @@ func (UnimplementedAgentServiceServer) RebootVM(context.Context, *RebootVMReques
 }
 func (UnimplementedAgentServiceServer) GetVM(context.Context, *GetVMRequest) (*VMResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetVM not implemented")
+}
+func (UnimplementedAgentServiceServer) ListVMs(context.Context, *ListVMsRequest) (*ListVMsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListVMs not implemented")
 }
 func (UnimplementedAgentServiceServer) GetNodeStatus(context.Context, *GetNodeStatusRequest) (*NodeStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetNodeStatus not implemented")
@@ -397,6 +417,24 @@ func _AgentService_GetVM_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_ListVMs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListVMsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ListVMs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ListVMs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ListVMs(ctx, req.(*ListVMsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_GetNodeStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNodeStatusRequest)
 	if err := dec(in); err != nil {
@@ -474,6 +512,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVM",
 			Handler:    _AgentService_GetVM_Handler,
+		},
+		{
+			MethodName: "ListVMs",
+			Handler:    _AgentService_ListVMs_Handler,
 		},
 		{
 			MethodName: "GetNodeStatus",

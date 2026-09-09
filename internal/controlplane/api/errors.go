@@ -7,82 +7,97 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/tuna2134/vps/internal/controlplane/models"
 	"github.com/tuna2134/vps/internal/controlplane/repositories"
 	"github.com/tuna2134/vps/internal/controlplane/users"
+	"github.com/tuna2134/vps/internal/controlplane/vms"
 )
 
-// ctxKey is a private type for context keys.
-type ctxKey int
+// principalKey is the gin context key for the authenticated principal.
+const principalKey = "api.principal"
 
-const (
-	ctxUser ctxKey = iota
-	ctxSession
-	ctxRoles
-)
-
-// withPrincipal stores the authenticated user, session, and roles in context.
-func withPrincipal(ctx context.Context, u *models.User, sess *models.Session, roles []models.Role) context.Context {
-	ctx = context.WithValue(ctx, ctxUser, u)
-	ctx = context.WithValue(ctx, ctxSession, sess)
-	return context.WithValue(ctx, ctxRoles, roles)
+type principal struct {
+	User    *models.User
+	Session *models.Session
+	Roles   []models.Role
 }
 
-// UserFrom returns the authenticated user from context.
-func UserFrom(ctx context.Context) *models.User {
-	u, _ := ctx.Value(ctxUser).(*models.User)
-	return u
+// withPrincipal stores the authenticated user, session, and roles.
+func withPrincipal(c *gin.Context, u *models.User, sess *models.Session, roles []models.Role) {
+	c.Set(principalKey, &principal{User: u, Session: sess, Roles: roles})
 }
 
-// SessionFrom returns the authenticated session from context.
-func SessionFrom(ctx context.Context) *models.Session {
-	s, _ := ctx.Value(ctxSession).(*models.Session)
-	return s
+// UserFrom returns the authenticated user.
+func UserFrom(c *gin.Context) *models.User {
+	if p, _ := c.Get(principalKey); p != nil {
+		if pr, ok := p.(*principal); ok {
+			return pr.User
+		}
+	}
+	return nil
+}
+
+// SessionFrom returns the authenticated session.
+func SessionFrom(c *gin.Context) *models.Session {
+	if p, _ := c.Get(principalKey); p != nil {
+		if pr, ok := p.(*principal); ok {
+			return pr.Session
+		}
+	}
+	return nil
 }
 
 // RolesFrom returns the principal's roles.
-func RolesFrom(ctx context.Context) []models.Role {
-	roles, _ := ctx.Value(ctxRoles).([]models.Role)
-	return roles
+func RolesFrom(c *gin.Context) []models.Role {
+	if p, _ := c.Get(principalKey); p != nil {
+		if pr, ok := p.(*principal); ok {
+			return pr.Roles
+		}
+	}
+	return nil
 }
 
 // mapError converts a domain error into an HTTP error response.
-func mapError(w http.ResponseWriter, err error) {
+func mapError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, users.ErrInvalidCredentials):
-		writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
+		writeError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
 	case errors.Is(err, users.ErrEmailTaken):
-		writeError(w, http.StatusConflict, "EMAIL_TAKEN", "email already registered")
+		writeError(c, http.StatusConflict, "EMAIL_TAKEN", "email already registered")
 	case errors.Is(err, users.ErrAccountDisabled):
-		writeError(w, http.StatusForbidden, "ACCOUNT_DISABLED", "account is disabled")
+		writeError(c, http.StatusForbidden, "ACCOUNT_DISABLED", "account is disabled")
 	case errors.Is(err, users.ErrTooManyAttempts):
-		writeError(w, http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "too many failed login attempts")
+		writeError(c, http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "too many failed login attempts")
 	case errors.Is(err, users.ErrInvalidToken):
-		writeError(w, http.StatusUnauthorized, "INVALID_SESSION", "invalid session token")
+		writeError(c, http.StatusUnauthorized, "INVALID_SESSION", "invalid session token")
 	case errors.Is(err, users.ErrSessionExpired):
-		writeError(w, http.StatusUnauthorized, "SESSION_EXPIRED", "session expired")
+		writeError(c, http.StatusUnauthorized, "SESSION_EXPIRED", "session expired")
 	case errors.Is(err, users.ErrSessionRevoked):
-		writeError(w, http.StatusUnauthorized, "SESSION_REVOKED", "session revoked")
+		writeError(c, http.StatusUnauthorized, "SESSION_REVOKED", "session revoked")
 	case errors.Is(err, repositories.ErrNotFound):
-		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "resource not found")
+		writeError(c, http.StatusNotFound, "RESOURCE_NOT_FOUND", "resource not found")
+	case errors.Is(err, vms.ErrNotFound):
+		writeError(c, http.StatusNotFound, "RESOURCE_NOT_FOUND", "resource not found")
 	case errors.Is(err, repositories.ErrConflict):
-		writeError(w, http.StatusConflict, "CONFLICT", "resource already exists")
+		writeError(c, http.StatusConflict, "CONFLICT", "resource already exists")
 	case errors.Is(err, context.DeadlineExceeded):
-		writeError(w, http.StatusGatewayTimeout, "TIMEOUT", "operation timed out")
+		writeError(c, http.StatusGatewayTimeout, "TIMEOUT", "operation timed out")
 	default:
-		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
+		writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
 	}
 }
 
 // mapServiceError handles service-level sentinel errors used across services.
-func mapServiceError(w http.ResponseWriter, err error) {
+func mapServiceError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, repositories.ErrNotFound):
-		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "resource not found")
+		writeError(c, http.StatusNotFound, "RESOURCE_NOT_FOUND", "resource not found")
 	case errors.Is(err, repositories.ErrConflict):
-		writeError(w, http.StatusConflict, "CONFLICT", "resource already exists")
+		writeError(c, http.StatusConflict, "CONFLICT", "resource already exists")
 	default:
-		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
+		writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
 	}
 }
 

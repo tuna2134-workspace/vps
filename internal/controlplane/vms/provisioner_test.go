@@ -225,7 +225,14 @@ func (c *testCatalog) BuildCreateRequest(ctx context.Context, pr *ProvisionReque
 		MemoryBytes:   uint64(pr.VM.MemoryMB) * 1024 * 1024,
 		DiskSizeBytes: uint64(pr.VM.DiskGB) * 1024 * 1024 * 1024,
 		Interfaces:    []*agentv1.NetworkInterfaceConfig{{Bridge: pr.Network.Bridge, MacAddress: pr.VM.MACAddress}},
-		CloudInit:     &agentv1.CloudInitConfig{InstanceId: pr.VM.InstanceID, Hostname: pr.VM.Hostname, Networks: []*agentv1.NetworkConfig{netCfg}},
+		CloudInit: &agentv1.CloudInitConfig{
+			InstanceId:        pr.VM.InstanceID,
+			Hostname:          pr.VM.Hostname,
+			User:              "root",
+			Password:          pr.VM.RootPassword,
+			SshAuthorizedKeys: pr.VM.SSHKeys,
+			Networks:          []*agentv1.NetworkConfig{netCfg},
+		},
 	}, nil
 }
 
@@ -260,7 +267,7 @@ func TestProvisionerCreateVMSuccess(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	p := NewProvisioner(&memoryOpStore{store: store}, &memoryVMStore{store: store}, catalog, func(ctx context.Context, endpoint string) (AgentClient, error) {
 		return agent, nil
-	}, time.Second, log)
+	}, nil, time.Second, log)
 
 	op := &models.VMOperation{ID: "op-1", VMID: "vm-1", OperationType: models.OperationCreate}
 	if err := p.createVM(context.Background(), op); err != nil {
@@ -288,7 +295,7 @@ func TestProvisionerCreateVMFailsAndReturnsError(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	p := NewProvisioner(&memoryOpStore{store: store}, &memoryVMStore{store: store}, catalog, func(ctx context.Context, endpoint string) (AgentClient, error) {
 		return agent, nil
-	}, time.Second, log)
+	}, nil, time.Second, log)
 
 	op := &models.VMOperation{ID: "op-2", VMID: "vm-2", OperationType: models.OperationCreate}
 	if err := p.createVM(context.Background(), op); err == nil {
@@ -305,6 +312,8 @@ func TestBuildCreateRequestHasNetworkConfig(t *testing.T) {
 		ID: "vm-3", NodeID: "node-1", ImageID: "img-1", NetworkID: "net-1",
 		Name: "web3", Hostname: "web3", Status: models.VMStatusPending,
 		VCPU: 1, MemoryMB: 1024, DiskGB: 10, MACAddress: "02:00:00:00:00:03", InstanceID: "i-3",
+		SSHKeys:      []string{"ssh-ed25519 AAAA user1@host"},
+		RootPassword: "s3cret-root!",
 	}
 	store.allocs = []models.IPAllocation{{VMID: "vm-3", IPAddress: "192.0.2.12", Gateway: "192.0.2.1", Prefix: 24}}
 
@@ -335,6 +344,14 @@ func TestBuildCreateRequestHasNetworkConfig(t *testing.T) {
 	}
 	if req.GetInterfaces()[0].GetBridge() != "br-public" {
 		t.Errorf("bridge wrong: %s", req.GetInterfaces()[0].GetBridge())
+	}
+	// Access credentials supplied at creation must reach cloud-init.
+	if len(req.GetCloudInit().GetSshAuthorizedKeys()) != 1 ||
+		req.GetCloudInit().GetSshAuthorizedKeys()[0] != "ssh-ed25519 AAAA user1@host" {
+		t.Errorf("ssh keys not propagated to cloud-init: %+v", req.GetCloudInit().GetSshAuthorizedKeys())
+	}
+	if req.GetCloudInit().GetPassword() != "s3cret-root!" {
+		t.Errorf("root password not propagated to cloud-init: %q", req.GetCloudInit().GetPassword())
 	}
 }
 

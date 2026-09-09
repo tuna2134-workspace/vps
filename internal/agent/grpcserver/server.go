@@ -4,16 +4,20 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/tuna2134/vps/internal/agent/libvirt"
 	"github.com/tuna2134/vps/internal/agent/manager"
 	"github.com/tuna2134/vps/internal/agent/metrics"
+	"github.com/tuna2134/vps/internal/agent/operations"
 
 	agentv1 "github.com/tuna2134/vps/proto/gen/agent/v1"
 	commonv1 "github.com/tuna2134/vps/proto/gen/common/v1"
@@ -22,19 +26,22 @@ import (
 // Server implements agentv1.AgentServiceServer.
 type Server struct {
 	agentv1.UnimplementedAgentServiceServer
-	manager *manager.Manager
-	libvirt libvirt.Manager
-	metrics *metrics.Provider
-	log     *slog.Logger
+	manager    *manager.Manager
+	libvirt    libvirt.Manager
+	metrics    *metrics.Provider
+	operations *operations.Service
+	log        *slog.Logger
 }
 
-// New builds the agent gRPC server.
-func New(mgr *manager.Manager, lv libvirt.Manager, metricsProvider *metrics.Provider, log *slog.Logger) *Server {
+// New builds the agent gRPC server. opSvc provides agent-side operation
+// idempotency; it may be nil to disable deduplication.
+func New(mgr *manager.Manager, lv libvirt.Manager, metricsProvider *metrics.Provider, opSvc *operations.Service, log *slog.Logger) *Server {
 	s := &Server{
-		manager: mgr,
-		libvirt: lv,
-		metrics: metricsProvider,
-		log:     log,
+		manager:    mgr,
+		libvirt:    lv,
+		metrics:    metricsProvider,
+		operations: opSvc,
+		log:        log,
 	}
 	if mgr != nil {
 		s.metrics.SetStoragePool(mgr.DefaultPool())
@@ -53,48 +60,73 @@ func errResponse(err error) *agentv1.OperationResponse {
 	}
 }
 
-func (s *Server) CreateVM(ctx context.Context, req *agentv1.CreateVMRequest) (*agentv1.OperationResponse, error) {
-	if err := s.manager.CreateVM(ctx, req); err != nil {
-		s.log.Error("create vm failed", "vm", req.GetVmId(), "error", err)
+// execute runs a mutating operation exactly once per operation_id.
+func (s *Server) execute(ctx context.Context, opID, opType, vmID string, req proto.Message, fn func(context.Context) error) (*agentv1.OperationResponse, error) {
+	if s.operations == nil {
+		if err := fn(ctx); err != nil {
+			return errResponse(err), nil
+		}
+		return okResponse(), nil
+	}
+	result, err := s.operations.Execute(ctx, opID, opType, vmID, hashRequest(req), fn)
+	if err != nil {
+		s.log.Error("operation dedup failed", "operation", opID, "type", opType, "error", err)
 		return errResponse(err), nil
 	}
-	return okResponse(), nil
+	if result.Succeeded() {
+		return okResponse(), nil
+	}
+	return errResponse(result.Error), nil
+}
+
+func (s *Server) CreateVM(ctx context.Context, req *agentv1.CreateVMRequest) (*agentv1.OperationResponse, error) {
+	resp, rpcErr := s.execute(ctx, req.GetOperationId(), "create", req.GetVmId(), req,
+		func(ctx context.Context) error { return s.manager.CreateVM(ctx, req) })
+	if rpcErr != nil {
+		s.log.Error("create vm dedup failed", "vm", req.GetVmId(), "error", rpcErr)
+	}
+	return resp, nil
 }
 
 func (s *Server) DeleteVM(ctx context.Context, req *agentv1.DeleteVMRequest) (*agentv1.OperationResponse, error) {
-	if err := s.manager.DeleteVM(ctx, req); err != nil {
-		s.log.Error("delete vm failed", "vm", req.GetVmId(), "error", err)
-		return errResponse(err), nil
+	resp, rpcErr := s.execute(ctx, req.GetOperationId(), "delete", req.GetVmId(), req,
+		func(ctx context.Context) error { return s.manager.DeleteVM(ctx, req) })
+	if rpcErr != nil {
+		s.log.Error("delete vm dedup failed", "vm", req.GetVmId(), "error", rpcErr)
 	}
-	return okResponse(), nil
+	return resp, nil
 }
 
 func (s *Server) StartVM(ctx context.Context, req *agentv1.StartVMRequest) (*agentv1.OperationResponse, error) {
-	if err := s.libvirt.StartDomain(vmName(req)); err != nil {
-		return errResponse(err), nil
-	}
-	return okResponse(), nil
+	return s.execute(ctx, req.GetOperationId(), "start", req.GetVmId(), req,
+		func(ctx context.Context) error { return s.libvirt.StartDomain(vmName(req)) })
 }
 
 func (s *Server) StopVM(ctx context.Context, req *agentv1.StopVMRequest) (*agentv1.OperationResponse, error) {
-	if err := s.libvirt.ShutdownDomain(vmName(req)); err != nil {
-		return errResponse(err), nil
-	}
-	return okResponse(), nil
+	return s.execute(ctx, req.GetOperationId(), "stop", req.GetVmId(), req,
+		func(ctx context.Context) error { return s.libvirt.ShutdownDomain(vmName(req)) })
 }
 
 func (s *Server) ForceStopVM(ctx context.Context, req *agentv1.ForceStopVMRequest) (*agentv1.OperationResponse, error) {
-	if err := s.libvirt.DestroyDomain(vmName(req)); err != nil {
-		return errResponse(err), nil
-	}
-	return okResponse(), nil
+	return s.execute(ctx, req.GetOperationId(), "force_stop", req.GetVmId(), req,
+		func(ctx context.Context) error { return s.libvirt.DestroyDomain(vmName(req)) })
 }
 
 func (s *Server) RebootVM(ctx context.Context, req *agentv1.RebootVMRequest) (*agentv1.OperationResponse, error) {
-	if err := s.libvirt.RebootDomain(vmName(req)); err != nil {
-		return errResponse(err), nil
+	return s.execute(ctx, req.GetOperationId(), "reboot", req.GetVmId(), req,
+		func(ctx context.Context) error { return s.libvirt.RebootDomain(vmName(req)) })
+}
+
+// hashRequest returns a stable SHA-256 digest of the request. The proto
+// messages used here contain only scalars and ordered repeated fields, so
+// proto.Marshal is deterministic for them.
+func hashRequest(req proto.Message) string {
+	b, err := proto.Marshal(req)
+	if err != nil {
+		return "unhashable"
 	}
-	return okResponse(), nil
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Server) GetVM(ctx context.Context, req *agentv1.GetVMRequest) (*agentv1.VMResponse, error) {
@@ -111,6 +143,28 @@ func (s *Server) GetNodeStatus(ctx context.Context, req *agentv1.GetNodeStatusRe
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &agentv1.NodeStatusResponse{Status: snapshotToProto(snap)}, nil
+}
+
+// ListVMs reports every domain on the node with its actual runtime state. The
+// Control Plane reconciles its DB against this.
+func (s *Server) ListVMs(ctx context.Context, req *agentv1.ListVMsRequest) (*agentv1.ListVMsResponse, error) {
+	names, err := s.libvirt.ListDomains()
+	if err != nil {
+		return nil, status.Error(codes.Internal, "list domains: "+err.Error())
+	}
+	resp := &agentv1.ListVMsResponse{}
+	for _, name := range names {
+		st, err := s.libvirt.GetDomainState(name)
+		if err != nil {
+			s.log.Warn("list vm state failed", "vm", name, "error", err)
+			continue
+		}
+		resp.Vms = append(resp.Vms, &agentv1.VMSummary{
+			VmName: name,
+			State:  stateToProto(st),
+		})
+	}
+	return resp, nil
 }
 
 func (s *Server) Heartbeat(ctx context.Context, req *agentv1.HeartbeatRequest) (*agentv1.HeartbeatResponse, error) {
@@ -198,6 +252,28 @@ func (s *Server) Console(stream agentv1.AgentService_ConsoleServer) error {
 
 func (s *Server) snapshot() (*metrics.Snapshot, error) {
 	return s.metrics.Sample()
+}
+
+// stateToProto maps the normalized agent VM state onto the common proto enum.
+func stateToProto(st libvirt.VMState) commonv1.VMState {
+	switch st {
+	case libvirt.StateRunning:
+		return commonv1.VMState_VM_STATE_RUNNING
+	case libvirt.StateBlocked:
+		return commonv1.VMState_VM_STATE_BLOCKED
+	case libvirt.StatePaused:
+		return commonv1.VMState_VM_STATE_PAUSED
+	case libvirt.StateShutdown:
+		return commonv1.VMState_VM_STATE_SHUTDOWN
+	case libvirt.StateCrashed:
+		return commonv1.VMState_VM_STATE_CRASHED
+	case libvirt.StatePMSuspended:
+		return commonv1.VMState_VM_STATE_PMSUSPENDED
+	case libvirt.StateShutoff:
+		return commonv1.VMState_VM_STATE_SHUTOFF
+	default:
+		return commonv1.VMState_VM_STATE_NOSTATE
+	}
 }
 
 func snapshotToProto(snap *metrics.Snapshot) *commonv1.NodeStatus {

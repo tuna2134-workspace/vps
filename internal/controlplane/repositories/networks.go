@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"net/netip"
 
 	"github.com/jackc/pgx/v5"
@@ -103,23 +104,29 @@ func NewIPPoolRepository(db DBTX) *IPPoolRepository {
 
 func (r *IPPoolRepository) CreatePool(ctx context.Context, pool *models.IPPool) (*models.IPPool, error) {
 	row := r.db.QueryRow(ctx, `
-		INSERT INTO ip_pools (network_id, cidr, "type", gateway)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, network_id, cidr, "type", gateway`,
-		pool.NetworkID, pool.CIDR, pool.Type, pool.Gateway)
+		INSERT INTO ip_pools (network_id, cidr, "type", gateway, allocation_type, delegation_prefix_length)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, network_id, cidr, "type", gateway, allocation_type, delegation_prefix_length`,
+		pool.NetworkID, pool.CIDR, pool.Type, pool.Gateway, pool.AllocationType, nullableInt(pool.DelegationPrefixLength))
 	var out models.IPPool
-	if err := row.Scan(&out.ID, &out.NetworkID, &out.CIDR, &out.Type, &out.Gateway); err != nil {
+	var delLen *int
+	if err := row.Scan(&out.ID, &out.NetworkID, &out.CIDR, &out.Type, &out.Gateway,
+		&out.AllocationType, &delLen); err != nil {
 		if isUniqueViolation(err) {
 			return nil, fmt.Errorf("create ip pool: %w", ErrConflict)
 		}
 		return nil, fmt.Errorf("create ip pool: %w", err)
+	}
+	if delLen != nil {
+		out.DelegationPrefixLength = *delLen
 	}
 	return &out, nil
 }
 
 func (r *IPPoolRepository) ListPoolsByNetwork(ctx context.Context, networkID string) ([]models.IPPool, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, network_id, cidr, "type", gateway FROM ip_pools WHERE network_id = $1`, networkID)
+		SELECT id, network_id, cidr, "type", gateway, allocation_type, delegation_prefix_length
+		FROM ip_pools WHERE network_id = $1`, networkID)
 	if err != nil {
 		return nil, fmt.Errorf("list ip pools: %w", err)
 	}
@@ -127,8 +134,13 @@ func (r *IPPoolRepository) ListPoolsByNetwork(ctx context.Context, networkID str
 	var out []models.IPPool
 	for rows.Next() {
 		var p models.IPPool
-		if err := rows.Scan(&p.ID, &p.NetworkID, &p.CIDR, &p.Type, &p.Gateway); err != nil {
+		var delLen *int
+		if err := rows.Scan(&p.ID, &p.NetworkID, &p.CIDR, &p.Type, &p.Gateway,
+			&p.AllocationType, &delLen); err != nil {
 			return nil, err
+		}
+		if delLen != nil {
+			p.DelegationPrefixLength = *delLen
 		}
 		out = append(out, p)
 	}
@@ -137,13 +149,19 @@ func (r *IPPoolRepository) ListPoolsByNetwork(ctx context.Context, networkID str
 
 func (r *IPPoolRepository) GetPoolByID(ctx context.Context, poolID string) (*models.IPPool, error) {
 	row := r.db.QueryRow(ctx, `
-		SELECT id, network_id, cidr, "type", gateway FROM ip_pools WHERE id = $1`, poolID)
+		SELECT id, network_id, cidr, "type", gateway, allocation_type, delegation_prefix_length
+		FROM ip_pools WHERE id = $1`, poolID)
 	var p models.IPPool
-	if err := row.Scan(&p.ID, &p.NetworkID, &p.CIDR, &p.Type, &p.Gateway); err != nil {
+	var delLen *int
+	if err := row.Scan(&p.ID, &p.NetworkID, &p.CIDR, &p.Type, &p.Gateway,
+		&p.AllocationType, &delLen); err != nil {
 		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get ip pool: %w", err)
+	}
+	if delLen != nil {
+		p.DelegationPrefixLength = *delLen
 	}
 	return &p, nil
 }
@@ -159,13 +177,19 @@ func (r *IPPoolRepository) Allocate(ctx context.Context, poolID, vmID, macAddres
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
 	var pool models.IPPool
+	var poolDelLen *int
 	if err := tx.QueryRow(ctx, `
-		SELECT id, network_id, cidr, type, gateway FROM ip_pools WHERE id = $1 FOR UPDATE`, poolID).
-		Scan(&pool.ID, &pool.NetworkID, &pool.CIDR, &pool.Type, &pool.Gateway); err != nil {
+		SELECT id, network_id, cidr, type, gateway, allocation_type, delegation_prefix_length
+		FROM ip_pools WHERE id = $1 FOR UPDATE`, poolID).
+		Scan(&pool.ID, &pool.NetworkID, &pool.CIDR, &pool.Type, &pool.Gateway,
+			&pool.AllocationType, &poolDelLen); err != nil {
 		if isNoRowsOrInvalidUUID(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("lock ip pool: %w", err)
+	}
+	if poolDelLen != nil {
+		pool.DelegationPrefixLength = *poolDelLen
 	}
 	if gateway == "" {
 		gateway = pool.Gateway
@@ -176,6 +200,11 @@ func (r *IPPoolRepository) Allocate(ctx context.Context, poolID, vmID, macAddres
 			return nil, fmt.Errorf("parse pool cidr: %w", err)
 		}
 		prefix = p.Bits()
+	}
+
+	// IPv6 prefix delegation: allocate by index, never by address scanning.
+	if pool.AllocationType == "prefix" {
+		return r.allocatePrefix(ctx, tx, &pool, vmID, macAddress, gateway)
 	}
 
 	addr, err := r.nextFreeAddress(ctx, tx, poolID, pool.CIDR, gateway)
@@ -197,6 +226,69 @@ func (r *IPPoolRepository) Allocate(ctx context.Context, poolID, vmID, macAddres
 		return nil, fmt.Errorf("commit ip allocation: %w", err)
 	}
 	return &a, nil
+}
+
+// allocatePrefix allocates the next free delegated IPv6 prefix for a "prefix"
+// pool. The next index is the high-water mark of allocated indices, so a
+// released (lower) index is never reused and concurrent allocations cannot
+// collide (the pool row is locked).
+func (r *IPPoolRepository) allocatePrefix(ctx context.Context, tx pgx.Tx, pool *models.IPPool, vmID, macAddress, gateway string) (*models.IPAllocation, error) {
+	parent, err := netip.ParsePrefix(pool.CIDR)
+	if err != nil {
+		return nil, fmt.Errorf("parse pool cidr: %w", err)
+	}
+	if pool.DelegationPrefixLength <= parent.Bits() || pool.DelegationPrefixLength > 128 {
+		return nil, fmt.Errorf("pool %s has invalid delegation_prefix_length %d for cidr %s",
+			pool.ID, pool.DelegationPrefixLength, pool.CIDR)
+	}
+	var idx int64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX(allocation_index), -1) + 1
+		FROM ip_allocations WHERE pool_id = $1 AND status = 'allocated'`, pool.ID).Scan(&idx); err != nil {
+		return nil, fmt.Errorf("next prefix index: %w", err)
+	}
+
+	addr, err := PrefixAt(parent, pool.DelegationPrefixLength, uint64(idx))
+	if err != nil {
+		return nil, err
+	}
+
+	row := tx.QueryRow(ctx, `
+		INSERT INTO ip_allocations (pool_id, vm_id, ip_address, mac_address, gateway, prefix, status, allocation_index)
+		VALUES ($1, $2, $3, $4, $5, $6, 'allocated', $7)
+		RETURNING id, pool_id, vm_id, ip_address, mac_address, gateway, prefix, status, allocation_index, allocated_at, released_at`,
+		pool.ID, vmID, addr.String(), macAddress, gateway, pool.DelegationPrefixLength, idx)
+	var a models.IPAllocation
+	if err := row.Scan(&a.ID, &a.PoolID, &a.VMID, &a.IPAddress, &a.MACAddress, &a.Gateway,
+		&a.Prefix, &a.Status, &a.AllocationIndex, &a.AllocatedAt, &a.ReleasedAt); err != nil {
+		return nil, fmt.Errorf("insert prefix allocation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit prefix allocation: %w", err)
+	}
+	return &a, nil
+}
+
+// PrefixAt returns the delegated prefix for the given index within an IPv6
+// pool. E.g. for pool 2001:db8:100::/48 and delegatedBits 64, index 0 ->
+// 2001:db8:100::/64, index 1 -> 2001:db8:100:1::/64.
+func PrefixAt(pool netip.Prefix, delegatedBits int, index uint64) (netip.Prefix, error) {
+	if !pool.Addr().Is6() {
+		return netip.Prefix{}, fmt.Errorf("prefix allocation requires an IPv6 pool")
+	}
+	count := delegatedBits - pool.Bits()
+	if count <= 0 || count > 64 {
+		return netip.Prefix{}, fmt.Errorf("invalid delegation: /%d from /%d", delegatedBits, pool.Bits())
+	}
+	if count < 64 && index >= uint64(1)<<count {
+		return netip.Prefix{}, fmt.Errorf("index %d out of range for %d delegated bits", index, count)
+	}
+	base := new(big.Int).SetBytes(pool.Masked().Addr().AsSlice())
+	offset := new(big.Int).Lsh(new(big.Int).SetUint64(index), uint(128-delegatedBits))
+	base.Add(base, offset)
+	var buf [16]byte
+	base.FillBytes(buf[:])
+	return netip.PrefixFrom(netip.AddrFrom16(buf), delegatedBits), nil
 }
 
 func (r *IPPoolRepository) nextFreeAddress(ctx context.Context, tx pgx.Tx, poolID, cidr, gateway string) (string, error) {
@@ -303,7 +395,7 @@ func (r *IPPoolRepository) Release(ctx context.Context, vmID string) error {
 
 func (r *IPPoolRepository) GetByVM(ctx context.Context, vmID string) ([]models.IPAllocation, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, pool_id, vm_id, ip_address, mac_address, gateway, prefix, status, allocated_at, released_at
+		SELECT id, pool_id, vm_id, ip_address, mac_address, gateway, prefix, status, allocation_index, allocated_at, released_at
 		FROM ip_allocations WHERE vm_id = $1 ORDER BY allocated_at`, vmID)
 	if err != nil {
 		return nil, fmt.Errorf("get allocations by vm: %w", err)
@@ -313,7 +405,7 @@ func (r *IPPoolRepository) GetByVM(ctx context.Context, vmID string) ([]models.I
 	for rows.Next() {
 		var a models.IPAllocation
 		if err := rows.Scan(&a.ID, &a.PoolID, &a.VMID, &a.IPAddress, &a.MACAddress, &a.Gateway,
-			&a.Prefix, &a.Status, &a.AllocatedAt, &a.ReleasedAt); err != nil {
+			&a.Prefix, &a.Status, &a.AllocationIndex, &a.AllocatedAt, &a.ReleasedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

@@ -96,9 +96,12 @@ func (s *Service) CreateVM(ctx context.Context, userID string, req CreateRequest
 	if idempotencyKey == "" {
 		idempotencyKey = uuid.NewString()
 	}
+	// Scope the key to the user so one user's key can never resolve another
+	// user's operation (cross-user information leak).
+	key := idempotencyKeyFor(userID, idempotencyKey)
 
 	// Idempotency: if an operation with this key already exists, return it.
-	if op, err := s.ops.GetByIdempotencyKey(ctx, idempotencyKey); err == nil {
+	if op, err := s.ops.GetByIdempotencyKey(ctx, key); err == nil {
 		vm, err := s.vms.GetByID(ctx, op.VMID)
 		if err != nil {
 			return nil, op, err
@@ -128,46 +131,59 @@ func (s *Service) CreateVM(ctx context.Context, userID string, req CreateRequest
 		req.DiskGB = plan.DiskGB
 	}
 
-	// Scheduler decides placement based on requested resources.
-	node, err := s.scheduler.Select(ctx, scheduler.Request{
+	// Atomically select a node and reserve its capacity. The reservation is
+	// released if any later step fails and committed once provisioning
+	// succeeds.
+	vmID := uuid.NewString()
+	node, err := s.scheduler.Reserve(ctx, vmID, scheduler.Request{
 		VCPU:     req.VCPU,
 		MemoryMB: req.MemoryMB,
 		DiskGB:   req.DiskGB,
 	})
 	if err != nil {
-		return nil, nil, ErrNoCapacity
+		if errors.Is(err, scheduler.ErrNoCapacity) {
+			return nil, nil, ErrNoCapacity
+		}
+		return nil, nil, err
 	}
+	releaseReservation := func() { _ = s.scheduler.Release(context.Background(), vmID) }
 
 	// Allocate a unique MAC before persisting the VM so the unique index is
 	// never violated.
 	mac, err := s.mac.Generate(ctx, nil)
 	if err != nil {
+		releaseReservation()
 		return nil, nil, fmt.Errorf("allocate mac: %w", err)
 	}
 
 	instanceID := uuid.NewString()
 	vm, err := s.vms.Create(ctx, &models.VM{
-		UserID:     userID,
-		PlanID:     req.PlanID,
-		NetworkID:  req.NetworkID,
-		ImageID:    req.ImageID,
-		NodeID:     node.ID,
-		Name:       req.Name,
-		Hostname:   req.Hostname,
-		Status:     models.VMStatusPending,
-		VCPU:       req.VCPU,
-		MemoryMB:   req.MemoryMB,
-		DiskGB:     req.DiskGB,
-		MACAddress: mac,
-		InstanceID: instanceID,
+		ID:           vmID,
+		UserID:       userID,
+		PlanID:       req.PlanID,
+		NetworkID:    req.NetworkID,
+		ImageID:      req.ImageID,
+		NodeID:       node.ID,
+		Name:         req.Name,
+		Hostname:     req.Hostname,
+		Status:       models.VMStatusPending,
+		VCPU:         req.VCPU,
+		MemoryMB:     req.MemoryMB,
+		DiskGB:       req.DiskGB,
+		MACAddress:   mac,
+		InstanceID:   instanceID,
+		SSHKeys:      req.SSHKeys,
+		RootPassword: req.RootPassword,
 	})
 	if err != nil {
+		releaseReservation()
 		return nil, nil, err
 	}
 
 	// Allocate an IP address for the VM.
 	alloc, err := s.networks.Allocate(ctx, req.NetworkID, vm.ID, mac)
 	if err != nil {
+		releaseReservation()
 		_ = s.vms.SoftDelete(ctx, vm.ID)
 		return nil, nil, err
 	}
@@ -175,14 +191,16 @@ func (s *Service) CreateVM(ctx context.Context, userID string, req CreateRequest
 	op, err := s.ops.Create(ctx, &models.VMOperation{
 		VMID:           vm.ID,
 		OperationType:  models.OperationCreate,
-		IdempotencyKey: idempotencyKey,
+		IdempotencyKey: key,
 	})
 	if err != nil {
 		if errors.Is(err, repositories.ErrConflict) {
 			// A concurrent request won the race; return the existing op.
-			existing, _ := s.ops.GetByIdempotencyKey(ctx, idempotencyKey)
+			releaseReservation()
+			existing, _ := s.ops.GetByIdempotencyKey(ctx, key)
 			return vm, existing, nil
 		}
+		releaseReservation()
 		_ = s.networks.Release(ctx, vm.ID)
 		_ = s.vms.SoftDelete(ctx, vm.ID)
 		return nil, nil, err
@@ -225,7 +243,10 @@ func (s *Service) NewOperation(ctx context.Context, userID, vmID string, opType 
 	if idempotencyKey == "" {
 		idempotencyKey = uuid.NewString()
 	}
-	if op, err := s.ops.GetByIdempotencyKey(ctx, idempotencyKey); err == nil {
+	// Scope the key to the user so one user's key can never resolve another
+	// user's operation (cross-user information leak).
+	key := idempotencyKeyFor(userID, idempotencyKey)
+	if op, err := s.ops.GetByIdempotencyKey(ctx, key); err == nil {
 		return op, nil
 	}
 	vm, err := s.vms.GetByID(ctx, vmID)
@@ -254,11 +275,11 @@ func (s *Service) NewOperation(ctx context.Context, userID, vmID string, opType 
 	op, err := s.ops.Create(ctx, &models.VMOperation{
 		VMID:           vm.ID,
 		OperationType:  opType,
-		IdempotencyKey: idempotencyKey,
+		IdempotencyKey: key,
 	})
 	if err != nil {
 		if errors.Is(err, repositories.ErrConflict) {
-			return s.ops.GetByIdempotencyKey(ctx, idempotencyKey)
+			return s.ops.GetByIdempotencyKey(ctx, key)
 		}
 		return nil, err
 	}
@@ -280,6 +301,13 @@ func (s *Service) billingAllowed(ctx context.Context, userID string) (bool, erro
 		return false, nil
 	}
 	return s.billingGate(ctx, userID)
+}
+
+// idempotencyKeyFor namespaces a client-supplied idempotency key to a single
+// user. Without this, two users using the same key would resolve each other's
+// operations (a cross-user information leak).
+func idempotencyKeyFor(userID, key string) string {
+	return userID + "|" + key
 }
 
 func (s *Service) validateTransition(vm *models.VM, opType models.OperationType) error {

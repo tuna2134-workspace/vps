@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -30,6 +31,8 @@ import (
 	"github.com/tuna2134/vps/internal/controlplane/models"
 	"github.com/tuna2134/vps/internal/controlplane/networks"
 	"github.com/tuna2134/vps/internal/controlplane/plans"
+	"github.com/tuna2134/vps/internal/controlplane/proxytrust"
+	"github.com/tuna2134/vps/internal/controlplane/reconciler"
 	"github.com/tuna2134/vps/internal/controlplane/repositories"
 	"github.com/tuna2134/vps/internal/controlplane/scheduler"
 	"github.com/tuna2134/vps/internal/controlplane/users"
@@ -104,19 +107,23 @@ func run(log *slog.Logger) error {
 
 	// --- Agent connections ---
 	agentFactory := agents.NewFactory(grpcclient.Options{
-		TLS:        cfg.TLSEnabled,
-		CertFile:   cfg.TLSCertFile,
-		KeyFile:    cfg.TLSKeyFile,
-		CAFile:     cfg.TLSCAFile,
-		ServerName: cfg.ServerName,
-		Timeout:    cfg.GRPCClientTimeout,
+		TLS:                 cfg.TLSEnabled,
+		CertFile:            cfg.TLSCertFile,
+		KeyFile:             cfg.TLSKeyFile,
+		CAFile:              cfg.TLSCAFile,
+		ServerName:          cfg.ServerName,
+		Timeout:             cfg.GRPCClientTimeout,
+		AuthToken:           cfg.AgentAuthToken,
+		RetryMaxRetries:     cfg.AgentRPCMaxRetries,
+		RetryInitialBackoff: cfg.AgentRPCInitialBackoff,
+		RetryMaxBackoff:     cfg.AgentRPCMaxBackoff,
 	})
 	defer agentFactory.CloseAll()
 
 	catalog := vms.NewCatalog(repos.VMs, repos.Nodes, repos.Images, networkSvc, repos.Networks, repos.IPPools)
-	provisioner := vms.NewProvisioner(repos.Operations, repos.VMs, catalog, agents.AgentFactoryFunc(agentFactory), cfg.GRPCClientTimeout, log)
+	provisioner := vms.NewProvisioner(repos.Operations, repos.VMs, catalog, agents.AgentFactoryFunc(agentFactory), repos.Reservations, cfg.GRPCClientTimeout, log)
 
-	sched := scheduler.New(repos.Nodes, repos.VMs)
+	sched := scheduler.New(repos.Nodes, repos.VMs, repos.Reservations)
 	macGen := macalloc.NewGenerator(repos.VMs)
 
 	// --- Billing ---
@@ -186,6 +193,10 @@ func run(log *slog.Logger) error {
 
 	// --- HTTP API ---
 	wsGateway := consolegateway.New(consoleSvc, log)
+	trust, err := proxytrust.New(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return fmt.Errorf("invalid TRUSTED_PROXY_CIDRS: %w", err)
+	}
 	router := api.NewRouter(api.Dependencies{
 		Users:      userSvc,
 		VMs:        vmSvc,
@@ -196,6 +207,7 @@ func run(log *slog.Logger) error {
 		Billing:    billingSvc,
 		Console:    consoleSvc,
 		ConsoleWS:  wsGateway.HandleWS,
+		ProxyTrust: trust,
 		ReadyCheck: func(ctx context.Context) error { return pool.Ping(ctx) },
 	}, log)
 
@@ -210,15 +222,29 @@ func run(log *slog.Logger) error {
 
 	// --- Background loops ---
 	provisioner.Start(4)
-	defer provisioner.Stop()
 
 	go nodeHeartbeatPoller(ctx, clusterSvc, agentFactory, cfg, log)
 	go nodeStatusReconciler(ctx, clusterSvc, log)
 	go sessionJanitor(ctx, repos.Sessions, log)
 	go billingSweeper(ctx, vmSvc, repos.Billing, cfg.BillingSweepInterval, log)
 
+	vmReconciler := reconciler.New(repos.Nodes, repos.VMs, func(ctx context.Context, endpoint string) (reconciler.AgentClient, error) {
+		return agentFactory.Client(ctx, endpoint)
+	}, auditSvc, log)
+	go vmReconcileLoop(ctx, vmReconciler, cfg.ReconcileInterval, log)
+
 	errCh := make(chan error, 1)
 	go func() {
+		if cfg.HTTPTLS {
+			log.Info("control plane listening (https)", "addr", cfg.HTTPListenAddress)
+			if err := server.ListenAndServeTLS(cfg.HTTPTLSCertFile, cfg.HTTPTLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+			return
+		}
+		if cfg.Env == "production" {
+			log.Warn("serving plaintext HTTP in production; set HTTP_TLS_ENABLED=true and front with TLS")
+		}
 		log.Info("control plane listening", "addr", cfg.HTTPListenAddress)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -230,6 +256,10 @@ func run(log *slog.Logger) error {
 		log.Info("shutting down")
 		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancelShutdown()
+		// Stop accepting new jobs and wait for in-flight provisioning.
+		if err := provisioner.Stop(shutdownCtx); err != nil {
+			log.Warn("provisioner shutdown incomplete", "error", err)
+		}
 		return server.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		return err
@@ -246,6 +276,23 @@ func nodeStatusReconciler(ctx context.Context, svc *cluster.Service, log *slog.L
 		case <-ticker.C:
 			if err := svc.ReconcileStatuses(ctx); err != nil {
 				log.Warn("node status reconciliation failed", "error", err)
+			}
+		}
+	}
+}
+
+// vmReconcileLoop periodically syncs DB VM state with the agents' actual
+// libvirt state.
+func vmReconcileLoop(ctx context.Context, r *reconciler.Reconciler, interval time.Duration, log *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.Reconcile(ctx); err != nil {
+				log.Warn("vm reconciliation failed", "error", err)
 			}
 		}
 	}

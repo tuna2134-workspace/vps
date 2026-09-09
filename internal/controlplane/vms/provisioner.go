@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
@@ -73,33 +74,48 @@ type ProvisionJob struct {
 // Provisioner runs VM operations asynchronously against agents. It is
 // deliberately decoupled from the scheduler and HTTP layer.
 type Provisioner struct {
-	ops     OperationStore
-	vms     VMStore
-	catalog ProvisioningCatalog
-	agents  AgentFactory
-	timeout time.Duration
-	jobs    chan ProvisionJob
-	log     *slog.Logger
-	stop    chan struct{}
+	ops          OperationStore
+	vms          VMStore
+	catalog      ProvisioningCatalog
+	agents       AgentFactory
+	reservations ReservationRepo
+	timeout      time.Duration
+	jobs         chan ProvisionJob
+	log          *slog.Logger
+
+	stopOnce sync.Once
+	stop     chan struct{}
+	wg       sync.WaitGroup
+	workers  int
 }
+
+// ReservationRepo commits or releases a node capacity reservation.
+type ReservationRepo interface {
+	Commit(ctx context.Context, vmID string) error
+	Release(ctx context.Context, vmID string) error
+}
+
+var _ ReservationRepo = (*repositories.ResourceReservationRepository)(nil)
 
 func NewProvisioner(
 	ops OperationStore,
 	vms VMStore,
 	catalog ProvisioningCatalog,
 	agents AgentFactory,
+	reservations ReservationRepo,
 	timeout time.Duration,
 	log *slog.Logger,
 ) *Provisioner {
 	p := &Provisioner{
-		ops:     ops,
-		vms:     vms,
-		catalog: catalog,
-		agents:  agents,
-		timeout: timeout,
-		jobs:    make(chan ProvisionJob, 256),
-		log:     log,
-		stop:    make(chan struct{}),
+		ops:          ops,
+		vms:          vms,
+		catalog:      catalog,
+		agents:       agents,
+		reservations: reservations,
+		timeout:      timeout,
+		jobs:         make(chan ProvisionJob, 256),
+		log:          log,
+		stop:         make(chan struct{}),
 	}
 	return p
 }
@@ -109,22 +125,49 @@ func (p *Provisioner) Start(workers int) {
 	if workers <= 0 {
 		workers = 4
 	}
+	p.workers = workers
 	for i := 0; i < workers; i++ {
-		go p.runWorker()
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			p.runWorker()
+		}()
 	}
 	p.log.Info("provisioner started", "workers", workers)
 }
 
-// Stop drains and stops the worker pool.
-func (p *Provisioner) Stop() {
-	close(p.stop)
+// Stop drains and stops the worker pool, waiting for in-flight jobs to finish.
+// It returns once all workers exit or the context is cancelled.
+func (p *Provisioner) Stop(ctx context.Context) error {
+	p.stopOnce.Do(func() {
+		close(p.stop)
+	})
+
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-// Enqueue submits a job to the worker pool. It never blocks callers.
+// Enqueue submits a job to the worker pool. It never blocks callers and is
+// safe to call concurrently with Stop (a job enqueued after shutdown begins is
+// dropped, never panicking on a closed channel).
 func (p *Provisioner) Enqueue(job ProvisionJob) {
 	select {
-	case p.jobs <- job:
 	case <-p.stop:
+		// Shutdown in progress; drop the job. The operation was already
+		// persisted in a terminal-or-running state by the service, so a
+		// restart's reconciler can pick it up.
+		return
+	case p.jobs <- job:
 	}
 }
 
@@ -175,10 +218,22 @@ func (p *Provisioner) process(ctx context.Context, job ProvisionJob) {
 		if op.VMID != "" {
 			_ = p.vms.UpdateStatus(ctx, op.VMID, models.VMStatusError)
 		}
+		// Free the reserved capacity so it can serve other requests.
+		if op.OperationType == models.OperationCreate && p.reservations != nil {
+			if rerr := p.reservations.Release(ctx, op.VMID); rerr != nil {
+				p.log.Error("release reservation failed", "vm", op.VMID, "error", rerr)
+			}
+		}
 		_ = p.ops.MarkFailed(ctx, op.ID, err.Error())
 		return
 	}
 
+	// Capacity reservation is fulfilled: mark it committed.
+	if op.OperationType == models.OperationCreate && p.reservations != nil {
+		if cerr := p.reservations.Commit(ctx, op.VMID); cerr != nil {
+			p.log.Error("commit reservation failed", "vm", op.VMID, "error", cerr)
+		}
+	}
 	_ = p.ops.MarkSucceeded(ctx, op.ID)
 	p.log.Info("operation succeeded", "operation", op.ID, "vm", op.VMID, "type", op.OperationType)
 }
@@ -198,6 +253,7 @@ func (p *Provisioner) createVM(ctx context.Context, op *models.VMOperation) erro
 	if err != nil {
 		return err
 	}
+	req.OperationId = op.ID
 	resp, err := client.CreateVM(ctx, req, p.timeout)
 	if err != nil {
 		return err
@@ -218,9 +274,10 @@ func (p *Provisioner) deleteVM(ctx context.Context, op *models.VMOperation) erro
 		return errors.New("agent unavailable: " + err.Error())
 	}
 	resp, err := client.DeleteVM(ctx, &agentv1.DeleteVMRequest{
-		VmId:       vm.ID,
-		VmName:     domainName(vm),
-		DeleteDisk: true,
+		VmId:        vm.ID,
+		VmName:      domainName(vm),
+		DeleteDisk:  true,
+		OperationId: op.ID,
 	}, p.timeout)
 	if err != nil {
 		return err
@@ -243,7 +300,7 @@ func (p *Provisioner) startVM(ctx context.Context, op *models.VMOperation) error
 	if err != nil {
 		return errors.New("agent unavailable: " + err.Error())
 	}
-	resp, err := client.StartVM(ctx, &agentv1.StartVMRequest{VmId: vm.ID, VmName: domainName(vm)}, p.timeout)
+	resp, err := client.StartVM(ctx, &agentv1.StartVMRequest{VmId: vm.ID, VmName: domainName(vm), OperationId: op.ID}, p.timeout)
 	if err != nil {
 		return err
 	}
@@ -262,7 +319,7 @@ func (p *Provisioner) stopVM(ctx context.Context, op *models.VMOperation) error 
 	if err != nil {
 		return errors.New("agent unavailable: " + err.Error())
 	}
-	resp, err := client.StopVM(ctx, &agentv1.StopVMRequest{VmId: vm.ID, VmName: domainName(vm), TimeoutSeconds: 60}, p.timeout)
+	resp, err := client.StopVM(ctx, &agentv1.StopVMRequest{VmId: vm.ID, VmName: domainName(vm), TimeoutSeconds: 60, OperationId: op.ID}, p.timeout)
 	if err != nil {
 		return err
 	}
@@ -281,7 +338,7 @@ func (p *Provisioner) forceStopVM(ctx context.Context, op *models.VMOperation) e
 	if err != nil {
 		return errors.New("agent unavailable: " + err.Error())
 	}
-	resp, err := client.ForceStopVM(ctx, &agentv1.ForceStopVMRequest{VmId: vm.ID, VmName: domainName(vm)}, p.timeout)
+	resp, err := client.ForceStopVM(ctx, &agentv1.ForceStopVMRequest{VmId: vm.ID, VmName: domainName(vm), OperationId: op.ID}, p.timeout)
 	if err != nil {
 		return err
 	}
@@ -300,7 +357,7 @@ func (p *Provisioner) rebootVM(ctx context.Context, op *models.VMOperation) erro
 	if err != nil {
 		return errors.New("agent unavailable: " + err.Error())
 	}
-	resp, err := client.RebootVM(ctx, &agentv1.RebootVMRequest{VmId: vm.ID, VmName: domainName(vm)}, p.timeout)
+	resp, err := client.RebootVM(ctx, &agentv1.RebootVMRequest{VmId: vm.ID, VmName: domainName(vm), OperationId: op.ID}, p.timeout)
 	if err != nil {
 		return err
 	}

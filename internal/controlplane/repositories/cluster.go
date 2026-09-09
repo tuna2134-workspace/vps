@@ -80,18 +80,22 @@ func NewNodeRepository(db DBTX) *NodeRepository {
 }
 
 const nodeCols = `id, cluster_id, name, agent_endpoint, status, cpu_capacity, memory_capacity_mb,
-	storage_capacity_gb, cpu_usage_percent, memory_usage_percent, last_heartbeat, created_at, updated_at`
+	storage_capacity_gb, cpu_usage_percent, memory_usage_percent, physical_cpu_cores,
+	cpu_overcommit_ratio, storage_free_bytes, last_heartbeat, created_at, updated_at`
 
 func scanNode(row pgx.Row) (*models.Node, error) {
 	var n models.Node
 	var cpuUsage, memUsage float32
+	var overcommit float64
 	if err := row.Scan(&n.ID, &n.ClusterID, &n.Name, &n.AgentEndpoint, &n.Status,
 		&n.CPUCapacity, &n.MemoryCapacityMB, &n.StorageCapacityGB,
-		&cpuUsage, &memUsage, &n.LastHeartbeat, &n.CreatedAt, &n.UpdatedAt); err != nil {
+		&cpuUsage, &memUsage, &n.PhysicalCores, &overcommit, &n.StorageFreeBytes,
+		&n.LastHeartbeat, &n.CreatedAt, &n.UpdatedAt); err != nil {
 		return nil, err
 	}
 	n.CPUUsagePercent = float64(cpuUsage)
 	n.MemoryUsagePercent = float64(memUsage)
+	n.CPUOvercommitRatio = overcommit
 	return &n, nil
 }
 
@@ -172,20 +176,32 @@ func (r *NodeRepository) ListHealthy(ctx context.Context) ([]models.Node, error)
 }
 
 // UpdateHeartbeat records agent capacity and liveness.
-func (r *NodeRepository) UpdateHeartbeat(ctx context.Context, nodeID string, cpuCapacity int, memoryCapacityMB, storageCapacityGB int64, cpuUsage, memUsage float64) error {
+func (r *NodeRepository) UpdateHeartbeat(ctx context.Context, nodeID string, cpuCapacity int, memoryCapacityMB, storageCapacityGB, storageFreeBytes int64, cpuUsage, memUsage float64) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE nodes SET
 			cpu_capacity = $2,
+			physical_cpu_cores = $2,
 			memory_capacity_mb = $3,
 			storage_capacity_gb = $4,
-			cpu_usage_percent = $5,
-			memory_usage_percent = $6,
+			storage_free_bytes = $5,
+			cpu_usage_percent = $6,
+			memory_usage_percent = $7,
 			last_heartbeat = now(),
 			status = 'healthy',
 			updated_at = now()
-		WHERE id = $1`, nodeID, cpuCapacity, memoryCapacityMB, storageCapacityGB, cpuUsage, memUsage)
+		WHERE id = $1`, nodeID, cpuCapacity, memoryCapacityMB, storageCapacityGB, storageFreeBytes, cpuUsage, memUsage)
 	if err != nil {
 		return fmt.Errorf("update node heartbeat: %w", err)
+	}
+	return nil
+}
+
+// SetOvercommitRatio updates the CPU overcommit ratio for a node.
+func (r *NodeRepository) SetOvercommitRatio(ctx context.Context, nodeID string, ratio float64) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE nodes SET cpu_overcommit_ratio = $2, updated_at = now() WHERE id = $1`, nodeID, ratio)
+	if err != nil {
+		return fmt.Errorf("set cpu overcommit ratio: %w", err)
 	}
 	return nil
 }

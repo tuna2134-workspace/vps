@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
 
@@ -17,14 +19,14 @@ func NewVMRepository(db DBTX) *VMRepository {
 }
 
 const vmCols = `id, user_id, plan_id, node_id, network_id, image_id, name, hostname, status,
-	vcpu, memory_mb, disk_gb, mac_address, instance_id, created_at, updated_at, deleted_at`
+	vcpu, memory_mb, disk_gb, mac_address, instance_id, ssh_keys, root_password, created_at, updated_at, deleted_at`
 
 func scanVM(row pgx.Row) (*models.VM, error) {
 	var v models.VM
 	var planID, nodeID, networkID, imageID *string
 	err := row.Scan(&v.ID, &v.UserID, &planID, &nodeID, &networkID, &imageID,
 		&v.Name, &v.Hostname, &v.Status, &v.VCPU, &v.MemoryMB, &v.DiskGB,
-		&v.MACAddress, &v.InstanceID, &v.CreatedAt, &v.UpdatedAt, &v.DeletedAt)
+		&v.MACAddress, &v.InstanceID, &v.SSHKeys, &v.RootPassword, &v.CreatedAt, &v.UpdatedAt, &v.DeletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -44,14 +46,21 @@ func scanVM(row pgx.Row) (*models.VM, error) {
 }
 
 func (r *VMRepository) Create(ctx context.Context, v *models.VM) (*models.VM, error) {
+	if v.ID == "" {
+		v.ID = uuid.NewString()
+	}
+	sshKeys := v.SSHKeys
+	if sshKeys == nil {
+		sshKeys = []string{}
+	}
 	row := r.db.QueryRow(ctx, `
-		INSERT INTO vms (user_id, plan_id, node_id, network_id, image_id, name, hostname, status,
-			vcpu, memory_mb, disk_gb, mac_address, instance_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		INSERT INTO vms (id, user_id, plan_id, node_id, network_id, image_id, name, hostname, status,
+			vcpu, memory_mb, disk_gb, mac_address, instance_id, ssh_keys, root_password)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING `+vmCols,
-		v.UserID, nullableID(v.PlanID), nullableID(v.NodeID), nullableID(v.NetworkID), nullableID(v.ImageID),
+		v.ID, v.UserID, nullableID(v.PlanID), nullableID(v.NodeID), nullableID(v.NetworkID), nullableID(v.ImageID),
 		v.Name, v.Hostname, v.Status,
-		v.VCPU, v.MemoryMB, v.DiskGB, v.MACAddress, v.InstanceID)
+		v.VCPU, v.MemoryMB, v.DiskGB, v.MACAddress, v.InstanceID, sshKeys, v.RootPassword)
 	created, err := scanVM(row)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -68,6 +77,14 @@ func nullableID(id string) any {
 		return nil
 	}
 	return id
+}
+
+// nullableInt converts a zero int to NULL for nullable integer columns.
+func nullableInt(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 func (r *VMRepository) GetByID(ctx context.Context, id string) (*models.VM, error) {

@@ -25,6 +25,9 @@ service AgentService {
   rpc RebootVM(RebootVMRequest) returns (OperationResponse);
   // GetVM returns the current status of a VM.
   rpc GetVM(GetVMRequest) returns (VMResponse);
+  // ListVMs lists every domain on this node with its actual runtime state. It
+  // is used by the Control Plane to reconcile DB state with libvirt reality.
+  rpc ListVMs(ListVMsRequest) returns (ListVMsResponse);
   // GetNodeStatus returns node resource usage and health.
   rpc GetNodeStatus(GetNodeStatusRequest) returns (NodeStatusResponse);
   // Heartbeat is periodically called by the Control Plane to check liveness
@@ -93,6 +96,10 @@ message CreateVMRequest {
   CloudInitConfig cloud_init = 9;
   // Storage pool name to use. Empty means the node default.
   string storage_pool = 10;
+  // Idempotency key supplied by the Control Plane. Retries of the same RPC
+  // carry the same operation_id; the agent deduplicates them so provisioning
+  // is never executed twice.
+  string operation_id = 11;
 }
 
 message ImageRef {
@@ -146,11 +153,15 @@ message DeleteVMRequest {
   string vm_name = 2;
   // Whether to also delete the disk volumes.
   bool delete_disk = 3;
+  // Idempotency key supplied by the Control Plane (see CreateVMRequest).
+  string operation_id = 4;
 }
 
 message StartVMRequest {
   string vm_id = 1;
   string vm_name = 2;
+  // Idempotency key supplied by the Control Plane (see CreateVMRequest).
+  string operation_id = 3;
 }
 
 message StopVMRequest {
@@ -158,21 +169,40 @@ message StopVMRequest {
   string vm_name = 2;
   // Graceful shutdown timeout in seconds before forcing.
   uint32 timeout_seconds = 3;
+  // Idempotency key supplied by the Control Plane (see CreateVMRequest).
+  string operation_id = 4;
 }
 
 message ForceStopVMRequest {
   string vm_id = 1;
   string vm_name = 2;
+  // Idempotency key supplied by the Control Plane (see CreateVMRequest).
+  string operation_id = 3;
 }
 
 message RebootVMRequest {
   string vm_id = 1;
   string vm_name = 2;
+  // Idempotency key supplied by the Control Plane (see CreateVMRequest).
+  string operation_id = 3;
 }
 
 message GetVMRequest {
   string vm_id = 1;
   string vm_name = 2;
+}
+
+message ListVMsRequest {}
+
+// VMSummary is a single domain's identity and runtime state.
+message VMSummary {
+  // Libvirt domain name (vps-<instance-id>).
+  string vm_name = 1;
+  common.v1.VMState state = 2;
+}
+
+message ListVMsResponse {
+  repeated VMSummary vms = 1;
 }
 
 message VMResponse {

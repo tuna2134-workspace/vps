@@ -119,7 +119,7 @@ func (s *Service) Heartbeat(ctx context.Context, agentName string, m *models.Nod
 		memUsage = float64(m.MemoryTotalBytes-m.MemoryFreeBytes) / float64(m.MemoryTotalBytes) * 100
 	}
 	return s.nodes.UpdateHeartbeat(ctx, node.ID, m.CPUCapacity,
-		memCapacityMB, storageCapacityGB,
+		memCapacityMB, storageCapacityGB, m.StorageFreeBytes,
 		m.CPUUsagePercent, memUsage)
 }
 

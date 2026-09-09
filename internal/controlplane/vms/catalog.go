@@ -114,10 +114,12 @@ func (c *Catalog) BuildCreateRequest(ctx context.Context, pr *ProvisionRequest) 
 	}
 
 	cloudInit := &agentv1.CloudInitConfig{
-		InstanceId: pr.VM.InstanceID,
-		Hostname:   pr.VM.Hostname,
-		User:       "root",
-		Networks:   []*agentv1.NetworkConfig{netCfg},
+		InstanceId:        pr.VM.InstanceID,
+		Hostname:          pr.VM.Hostname,
+		User:              "root",
+		Password:          pr.VM.RootPassword,
+		SshAuthorizedKeys: pr.VM.SSHKeys,
+		Networks:          []*agentv1.NetworkConfig{netCfg},
 	}
 
 	return &agentv1.CreateVMRequest{

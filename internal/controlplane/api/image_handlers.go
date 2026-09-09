@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/tuna2134/vps/internal/controlplane/images"
 	"github.com/tuna2134/vps/internal/controlplane/models"
 )
@@ -29,35 +31,35 @@ func NewImageHandlers(imageSvc *images.Service) *ImageHandlers {
 	return &ImageHandlers{images: imageSvc}
 }
 
-func (h *ImageHandlers) List(w http.ResponseWriter, r *http.Request) {
-	imgs, err := h.images.List(r.Context(), r.URL.Query().Get("active") != "false")
+func (h *ImageHandlers) List(c *gin.Context) {
+	imgs, err := h.images.List(c.Request.Context(), c.Query("active") != "false")
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, imgs)
+	writeData(c, http.StatusOK, imgs)
 }
 
-func (h *ImageHandlers) Get(w http.ResponseWriter, r *http.Request) {
-	img, err := h.images.Get(r.Context(), pathSegment(r, "/v1/images/"))
+func (h *ImageHandlers) Get(c *gin.Context) {
+	img, err := h.images.Get(c.Request.Context(), c.Param("id"))
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, img)
+	writeData(c, http.StatusOK, img)
 }
 
-func (h *ImageHandlers) Create(w http.ResponseWriter, r *http.Request) {
+func (h *ImageHandlers) Create(c *gin.Context) {
 	var req imageRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	if req.Name == "" || req.Version == "" || req.SourceURL == "" {
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "name, version and source_url are required")
+		writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", "name, version and source_url are required")
 		return
 	}
-	created, err := h.images.Create(r.Context(), &models.Image{
+	created, err := h.images.Create(c.Request.Context(), &models.Image{
 		Name:                req.Name,
 		Version:             req.Version,
 		Architecture:        req.Architecture,
@@ -72,11 +74,11 @@ func (h *ImageHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if err == images.ErrConflict {
-			writeError(w, http.StatusConflict, "CONFLICT", "image already exists")
+			writeError(c, http.StatusConflict, "CONFLICT", "image already exists")
 			return
 		}
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusCreated, created)
+	writeData(c, http.StatusCreated, created)
 }

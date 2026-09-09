@@ -17,6 +17,12 @@ type Config struct {
 	HTTPListenAddress string
 	GRPCListenAddress string
 
+	// HTTP TLS (HTTPS). When enabled the HTTP server serves TLS with the
+	// given certificate/key.
+	HTTPTLS         bool
+	HTTPTLSCertFile string
+	HTTPTLSKeyFile  string
+
 	DatabaseURL string
 
 	// Session / auth
@@ -35,6 +41,10 @@ type Config struct {
 
 	// gRPC -> Agent
 	GRPCClientTimeout time.Duration
+	// Agent RPC retry policy for transient failures.
+	AgentRPCMaxRetries     int
+	AgentRPCInitialBackoff time.Duration
+	AgentRPCMaxBackoff     time.Duration
 
 	// Stripe
 	StripeSecretKey     string
@@ -50,15 +60,24 @@ type Config struct {
 	TLSKeyFile  string
 	TLSCAFile   string
 	ServerName  string
+	// AgentAuthToken is the shared secret sent to agents as a Bearer token.
+	// It protects agent gRPC even when TLS is disabled.
+	AgentAuthToken string
 	// Node heartbeat offline threshold
 	NodeOfflineAfter time.Duration
 	// Node heartbeat degraded threshold
 	NodeDegradedAfter time.Duration
+	// VM/libvirt state reconciliation interval
+	ReconcileInterval time.Duration
 
 	// Console
 	ConsoleTokenTTL time.Duration
 	// Public base URL used in console websocket URLs
 	PublicBaseURL string
+
+	// TrustedProxyCIDRs lists reverse-proxy networks whose forwarded headers
+	// (X-Forwarded-For) are trusted when resolving the client IP.
+	TrustedProxyCIDRs []string
 }
 
 func getenv(key, def string) string {
@@ -116,6 +135,9 @@ func Load() (*Config, error) {
 		HTTPListenAddress: getenv("HTTP_LISTEN_ADDRESS", ":8080"),
 		GRPCListenAddress: getenv("GRPC_LISTEN_ADDRESS", ":9000"),
 		DatabaseURL:       getenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/vps?sslmode=disable"),
+		HTTPTLS:           getenvBool("HTTP_TLS_ENABLED", false),
+		HTTPTLSCertFile:   getenv("HTTP_TLS_CERT_FILE", ""),
+		HTTPTLSKeyFile:    getenv("HTTP_TLS_KEY_FILE", ""),
 
 		SessionTTL:       getenvDuration("SESSION_TTL", 24*time.Hour),
 		SessionTokenLen:  getenvInt("SESSION_TOKEN_LEN", 32),
@@ -129,7 +151,10 @@ func Load() (*Config, error) {
 		Argon2SaltLength:  getenvUint32("ARGON2_SALT_LENGTH", 16),
 		Argon2KeyLength:   getenvUint32("ARGON2_KEY_LENGTH", 32),
 
-		GRPCClientTimeout: getenvDuration("GRPC_CLIENT_TIMEOUT", 30*time.Second),
+		GRPCClientTimeout:      getenvDuration("GRPC_CLIENT_TIMEOUT", 30*time.Second),
+		AgentRPCMaxRetries:     getenvInt("AGENT_RPC_MAX_RETRIES", 5),
+		AgentRPCInitialBackoff: getenvDuration("AGENT_RPC_INITIAL_BACKOFF", 500*time.Millisecond),
+		AgentRPCMaxBackoff:     getenvDuration("AGENT_RPC_MAX_BACKOFF", 5*time.Second),
 
 		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
@@ -142,11 +167,15 @@ func Load() (*Config, error) {
 		TLSKeyFile:        getenv("TLS_KEY_FILE", ""),
 		TLSCAFile:         getenv("TLS_CA_FILE", ""),
 		ServerName:        getenv("TLS_SERVER_NAME", "agent.internal"),
+		AgentAuthToken:    getenv("AGENT_AUTH_TOKEN", ""),
 		NodeOfflineAfter:  getenvDuration("NODE_OFFLINE_AFTER", 60*time.Second),
 		NodeDegradedAfter: getenvDuration("NODE_DEGRADED_AFTER", 30*time.Second),
+		ReconcileInterval: getenvDuration("RECONCILE_INTERVAL", 45*time.Second),
 
 		ConsoleTokenTTL: getenvDuration("CONSOLE_TOKEN_TTL", 2*time.Minute),
 		PublicBaseURL:   getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
+		TrustedProxyCIDRs: splitCSV(getenv("TRUSTED_PROXY_CIDRS",
+			"127.0.0.1/32, ::1/128")),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -162,6 +191,11 @@ func (c *Config) validate() error {
 	if c.Argon2Memory < 64*1024 {
 		return fmt.Errorf("ARGON2_MEMORY is too low")
 	}
+	if c.HTTPTLS {
+		if c.HTTPTLSCertFile == "" || c.HTTPTLSKeyFile == "" {
+			return fmt.Errorf("HTTP_TLS_ENABLED=true requires HTTP_TLS_CERT_FILE and HTTP_TLS_KEY_FILE")
+		}
+	}
 	return nil
 }
 
@@ -173,4 +207,15 @@ func DatabaseName(dsn string) string {
 		}
 	}
 	return "vps"
+}
+
+// splitCSV splits a comma-separated list, trimming spaces and empty entries.
+func splitCSV(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

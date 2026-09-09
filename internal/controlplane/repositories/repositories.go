@@ -20,6 +20,7 @@ type Repositories struct {
 	Billing       *BillingRepository
 	ConsoleTokens *ConsoleTokenRepository
 	Audit         *AuditRepository
+	Reservations  *ResourceReservationRepository
 }
 
 // New builds all repositories backed by the given connection pool.
@@ -41,5 +42,6 @@ func New(pool *pgxpool.Pool) *Repositories {
 		Billing:       NewBillingRepository(pool),
 		ConsoleTokens: NewConsoleTokenRepository(pool),
 		Audit:         NewAuditRepository(pool),
+		Reservations:  NewResourceReservationRepository(pool),
 	}
 }

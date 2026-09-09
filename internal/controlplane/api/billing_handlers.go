@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/tuna2134/vps/internal/controlplane/billing"
 )
 
@@ -27,22 +29,22 @@ func NewBillingHandlers(billingSvc *billing.Service) *BillingHandlers {
 	return &BillingHandlers{billing: billingSvc}
 }
 
-func (h *BillingHandlers) GetSubscription(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	sub, err := h.billing.GetSubscription(r.Context(), u.ID)
+func (h *BillingHandlers) GetSubscription(c *gin.Context) {
+	u := UserFrom(c)
+	sub, err := h.billing.GetSubscription(c.Request.Context(), u.ID)
 	if err != nil {
 		if errors.Is(err, billing.ErrNotFound) {
-			writeData(w, http.StatusOK, nil)
+			writeData(c, http.StatusOK, nil)
 			return
 		}
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
 	periodEnd := ""
 	if sub.CurrentPeriodEnd != nil {
 		periodEnd = sub.CurrentPeriodEnd.Format("2006-01-02T15:04:05Z")
 	}
-	writeData(w, http.StatusOK, subscriptionResponse{
+	writeData(c, http.StatusOK, subscriptionResponse{
 		ID:               sub.ID,
 		Status:           sub.Status,
 		BillingStatus:    sub.BillingStatus,
@@ -50,42 +52,42 @@ func (h *BillingHandlers) GetSubscription(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func (h *BillingHandlers) ListInvoices(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	invoices, err := h.billing.ListInvoices(r.Context(), u.ID)
+func (h *BillingHandlers) ListInvoices(c *gin.Context) {
+	u := UserFrom(c)
+	invoices, err := h.billing.ListInvoices(c.Request.Context(), u.ID)
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, invoices)
+	writeData(c, http.StatusOK, invoices)
 }
 
-func (h *BillingHandlers) CreateSubscription(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
+func (h *BillingHandlers) CreateSubscription(c *gin.Context) {
+	u := UserFrom(c)
 	var req checkoutRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	if req.StripePriceID == "" {
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "stripe_price_id is required")
+		writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", "stripe_price_id is required")
 		return
 	}
-	customer, err := h.billing.GetOrCreateCustomer(r.Context(), u.ID, u.Email)
+	customer, err := h.billing.GetOrCreateCustomer(c.Request.Context(), u.ID, u.Email)
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	sub, err := h.billing.CreateSubscription(r.Context(), u.ID, customer.StripeCustomerID, req.StripePriceID)
+	sub, err := h.billing.CreateSubscription(c.Request.Context(), u.ID, customer.StripeCustomerID, req.StripePriceID)
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
 	periodEnd := ""
 	if sub.CurrentPeriodEnd != nil {
 		periodEnd = sub.CurrentPeriodEnd.Format("2006-01-02T15:04:05Z")
 	}
-	writeData(w, http.StatusCreated, subscriptionResponse{
+	writeData(c, http.StatusCreated, subscriptionResponse{
 		ID:               sub.ID,
 		Status:           sub.Status,
 		BillingStatus:    sub.BillingStatus,
@@ -95,22 +97,22 @@ func (h *BillingHandlers) CreateSubscription(w http.ResponseWriter, r *http.Requ
 
 // StripeWebhook receives and verifies Stripe webhook events. Processing is
 // quick and idempotent; long-running side effects are delegated to callbacks.
-func (h *BillingHandlers) StripeWebhook(w http.ResponseWriter, r *http.Request) {
+func (h *BillingHandlers) StripeWebhook(c *gin.Context) {
 	const maxBody = 1 << 20 // 1 MiB
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxBody))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "unable to read request body")
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "unable to read request body")
 		return
 	}
-	processed, err := h.billing.HandleWebhook(r.Context(), body, r.Header.Get("Stripe-Signature"))
+	processed, err := h.billing.HandleWebhook(c.Request.Context(), body, c.Request.Header.Get("Stripe-Signature"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "WEBHOOK_ERROR", "unable to verify or process webhook")
+		writeError(c, http.StatusBadRequest, "WEBHOOK_ERROR", "unable to verify or process webhook")
 		return
 	}
 	if !processed {
 		// Duplicate event; acknowledge to avoid Stripe retries.
-		writeData(w, http.StatusOK, map[string]any{"already_processed": true})
+		writeData(c, http.StatusOK, map[string]any{"already_processed": true})
 		return
 	}
-	writeData(w, http.StatusOK, map[string]any{"received": true})
+	writeData(c, http.StatusOK, map[string]any{"received": true})
 }

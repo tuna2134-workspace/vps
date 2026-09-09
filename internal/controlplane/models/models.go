@@ -102,9 +102,15 @@ type Node struct {
 	StorageCapacityGB  int64      `json:"storage_capacity_gb"`
 	CPUUsagePercent    float64    `json:"cpu_usage_percent"`
 	MemoryUsagePercent float64    `json:"memory_usage_percent"`
-	LastHeartbeat      *time.Time `json:"last_heartbeat,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	// PhysicalCores is the number of physical cores reported by the agent.
+	PhysicalCores int `json:"physical_cpu_cores"`
+	// CPUOvercommitRatio scales physical cores into allocatable vCPUs.
+	CPUOvercommitRatio float64 `json:"cpu_overcommit_ratio"`
+	// StorageFreeBytes is the free storage reported by the agent heartbeat.
+	StorageFreeBytes int64      `json:"storage_free_bytes"`
+	LastHeartbeat    *time.Time `json:"last_heartbeat,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type StoragePool struct {
@@ -116,6 +122,30 @@ type StoragePool struct {
 	TotalBytes int64  `json:"total_bytes"`
 	UsedBytes  int64  `json:"used_bytes"`
 	Status     string `json:"status"`
+}
+
+// ReservationRequest describes the capacity a VM needs, used to reserve node
+// resources before the VM record is committed.
+type ReservationRequest struct {
+	VMID         string
+	ClusterID    string
+	VCPU         int
+	MemoryBytes  int64
+	StorageBytes int64
+}
+
+// ResourceReservation is a node capacity reservation for a not-yet-provisioned
+// VM.
+type ResourceReservation struct {
+	ID           string    `json:"id"`
+	NodeID       string    `json:"node_id"`
+	VMID         string    `json:"vm_id"`
+	CPUVCPU      int       `json:"cpu_vcpu"`
+	MemoryBytes  int64     `json:"memory_bytes"`
+	StorageBytes int64     `json:"storage_bytes"`
+	State        string    `json:"state"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type Plan struct {
@@ -158,6 +188,12 @@ type IPPool struct {
 	CIDR      string `json:"cidr"`
 	Type      string `json:"type"`
 	Gateway   string `json:"gateway"`
+	// AllocationType is "address" (default, individual IPv4/IPv6 addresses) or
+	// "prefix" (IPv6 prefix delegation).
+	AllocationType string `json:"allocation_type"`
+	// DelegationPrefixLength is the delegated prefix length for "prefix" pools
+	// (e.g. 64 when delegating /64s from a /48).
+	DelegationPrefixLength int `json:"delegation_prefix_length,omitempty"`
 }
 
 type IPAllocationStatus string
@@ -178,6 +214,8 @@ type IPAllocation struct {
 	Status      IPAllocationStatus `json:"status"`
 	AllocatedAt time.Time          `json:"allocated_at"`
 	ReleasedAt  *time.Time         `json:"released_at,omitempty"`
+	// AllocationIndex is set for IPv6 prefix-delegated allocations.
+	AllocationIndex *int64 `json:"allocation_index,omitempty"`
 }
 
 type Image struct {
@@ -211,23 +249,28 @@ const (
 )
 
 type VM struct {
-	ID         string     `json:"id"`
-	UserID     string     `json:"user_id"`
-	PlanID     string     `json:"plan_id,omitempty"`
-	NodeID     string     `json:"node_id,omitempty"`
-	NetworkID  string     `json:"network_id,omitempty"`
-	ImageID    string     `json:"image_id,omitempty"`
-	Name       string     `json:"name"`
-	Hostname   string     `json:"hostname"`
-	Status     VMStatus   `json:"status"`
-	VCPU       int        `json:"vcpu"`
-	MemoryMB   int        `json:"memory_mb"`
-	DiskGB     int        `json:"disk_gb"`
-	MACAddress string     `json:"mac_address"`
-	InstanceID string     `json:"instance_id"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
+	ID         string   `json:"id"`
+	UserID     string   `json:"user_id"`
+	PlanID     string   `json:"plan_id,omitempty"`
+	NodeID     string   `json:"node_id,omitempty"`
+	NetworkID  string   `json:"network_id,omitempty"`
+	ImageID    string   `json:"image_id,omitempty"`
+	Name       string   `json:"name"`
+	Hostname   string   `json:"hostname"`
+	Status     VMStatus `json:"status"`
+	VCPU       int      `json:"vcpu"`
+	MemoryMB   int      `json:"memory_mb"`
+	DiskGB     int      `json:"disk_gb"`
+	MACAddress string   `json:"mac_address"`
+	InstanceID string   `json:"instance_id"`
+	// SSHKeys are the public keys injected via cloud-init. RootPassword is the
+	// plaintext password seeded into the OS; it is never serialized to API
+	// clients.
+	SSHKeys      []string   `json:"ssh_keys"`
+	RootPassword string     `json:"-"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
 }
 
 type OperationType string

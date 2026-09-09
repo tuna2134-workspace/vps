@@ -5,6 +5,7 @@ package networks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 
 	"github.com/tuna2134/vps/internal/controlplane/audit"
@@ -83,6 +84,22 @@ func (s *Service) SetNetworkStatus(ctx context.Context, id, status string) error
 func (s *Service) AddPool(ctx context.Context, pool *models.IPPool) (*models.IPPool, error) {
 	if err := validateCIDR(pool.CIDR); err != nil {
 		return nil, err
+	}
+	if pool.AllocationType == "" {
+		pool.AllocationType = "address"
+	}
+	if pool.AllocationType == "prefix" {
+		if pool.Type != "ipv6" {
+			return nil, fmt.Errorf("prefix allocation requires an ipv6 pool")
+		}
+		if pool.DelegationPrefixLength <= 0 {
+			return nil, fmt.Errorf("delegation_prefix_length is required for prefix pools")
+		}
+		if p, err := netip.ParsePrefix(pool.CIDR); err != nil {
+			return nil, fmt.Errorf("parse pool cidr: %w", err)
+		} else if pool.DelegationPrefixLength <= p.Bits() || pool.DelegationPrefixLength > 128 {
+			return nil, fmt.Errorf("delegation_prefix_length %d is not a valid delegation of %s", pool.DelegationPrefixLength, pool.CIDR)
+		}
 	}
 	created, err := s.pools.CreatePool(ctx, pool)
 	if err != nil {

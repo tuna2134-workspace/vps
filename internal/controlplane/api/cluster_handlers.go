@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/tuna2134/vps/internal/controlplane/cluster"
 )
 
@@ -25,85 +27,83 @@ func NewClusterHandlers(clusterSvc *cluster.Service) *ClusterHandlers {
 	return &ClusterHandlers{cluster: clusterSvc}
 }
 
-func (h *ClusterHandlers) ListClusters(w http.ResponseWriter, r *http.Request) {
-	clusters, err := h.cluster.ListClusters(r.Context())
+func (h *ClusterHandlers) ListClusters(c *gin.Context) {
+	clusters, err := h.cluster.ListClusters(c.Request.Context())
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, clusters)
+	writeData(c, http.StatusOK, clusters)
 }
 
-func (h *ClusterHandlers) CreateCluster(w http.ResponseWriter, r *http.Request) {
+func (h *ClusterHandlers) CreateCluster(c *gin.Context) {
 	var req clusterRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "name is required")
+		writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", "name is required")
 		return
 	}
-	c, err := h.cluster.CreateCluster(r.Context(), req.Name, req.Description)
+	cl, err := h.cluster.CreateCluster(c.Request.Context(), req.Name, req.Description)
 	if err != nil {
 		if err == cluster.ErrConflict {
-			writeError(w, http.StatusConflict, "CONFLICT", "cluster already exists")
+			writeError(c, http.StatusConflict, "CONFLICT", "cluster already exists")
 			return
 		}
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusCreated, c)
+	writeData(c, http.StatusCreated, cl)
 }
 
-func (h *ClusterHandlers) ListNodes(w http.ResponseWriter, r *http.Request) {
-	clusterID := r.URL.Query().Get("cluster_id")
-	nodes, err := h.cluster.ListNodes(r.Context(), clusterID)
+func (h *ClusterHandlers) ListNodes(c *gin.Context) {
+	nodes, err := h.cluster.ListNodes(c.Request.Context(), c.Query("cluster_id"))
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, nodes)
+	writeData(c, http.StatusOK, nodes)
 }
 
-func (h *ClusterHandlers) RegisterNode(w http.ResponseWriter, r *http.Request) {
+func (h *ClusterHandlers) RegisterNode(c *gin.Context) {
 	var req nodeRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	if req.ClusterID == "" || req.Name == "" || req.Endpoint == "" {
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "cluster_id, name and agent_endpoint are required")
+		writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", "cluster_id, name and agent_endpoint are required")
 		return
 	}
-	n, err := h.cluster.RegisterNode(r.Context(), req.ClusterID, req.Name, req.Endpoint)
+	n, err := h.cluster.RegisterNode(c.Request.Context(), req.ClusterID, req.Name, req.Endpoint)
 	if err != nil {
 		if err == cluster.ErrConflict {
-			writeError(w, http.StatusConflict, "CONFLICT", "node already exists")
+			writeError(c, http.StatusConflict, "CONFLICT", "node already exists")
 			return
 		}
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusCreated, n)
+	writeData(c, http.StatusCreated, n)
 }
 
-func (h *ClusterHandlers) GetNode(w http.ResponseWriter, r *http.Request) {
-	nodeID := pathSegment(r, "/v1/nodes/")
-	n, err := h.cluster.GetNode(r.Context(), nodeID)
+func (h *ClusterHandlers) GetNode(c *gin.Context) {
+	nodeID := c.Param("id")
+	n, err := h.cluster.GetNode(c.Request.Context(), nodeID)
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, n)
+	writeData(c, http.StatusOK, n)
 }
 
-func (h *ClusterHandlers) ListStoragePools(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.URL.Query().Get("node_id")
-	pools, err := h.cluster.ListStoragePools(r.Context(), nodeID)
+func (h *ClusterHandlers) ListStoragePools(c *gin.Context) {
+	pools, err := h.cluster.ListStoragePools(c.Request.Context(), c.Query("node_id"))
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, pools)
+	writeData(c, http.StatusOK, pools)
 }

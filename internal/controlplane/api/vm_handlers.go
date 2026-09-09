@@ -2,7 +2,8 @@ package api
 
 import (
 	"net/http"
-	"strings"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
 	"github.com/tuna2134/vps/internal/controlplane/vms"
@@ -43,15 +44,15 @@ func NewVMHandlers(vmSvc *vms.Service) *VMHandlers {
 	return &VMHandlers{vms: vmSvc}
 }
 
-func (h *VMHandlers) CreateVM(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
+func (h *VMHandlers) CreateVM(c *gin.Context) {
+	u := UserFrom(c)
 	var req createVMRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	if req.PlanID == "" || req.NetworkID == "" || req.ImageID == "" {
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "plan_id, network_id and image_id are required")
+		writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", "plan_id, network_id and image_id are required")
 		return
 	}
 	if req.Name == "" {
@@ -61,7 +62,7 @@ func (h *VMHandlers) CreateVM(w http.ResponseWriter, r *http.Request) {
 		req.Hostname = req.Name
 	}
 
-	vm, op, err := h.vms.CreateVM(r.Context(), u.ID, vms.CreateRequest{
+	vm, op, err := h.vms.CreateVM(c.Request.Context(), u.ID, vms.CreateRequest{
 		PlanID:       req.PlanID,
 		NetworkID:    req.NetworkID,
 		ImageID:      req.ImageID,
@@ -71,44 +72,36 @@ func (h *VMHandlers) CreateVM(w http.ResponseWriter, r *http.Request) {
 		RootPassword: req.RootPassword,
 	}, req.IdempotencyKey)
 	if err != nil {
-		writeVMError(w, err)
+		writeVMError(c, err)
 		return
 	}
-	writeData(w, http.StatusAccepted, createVMResponse{OperationID: op.ID, VMID: vm.ID})
+	writeData(c, http.StatusAccepted, createVMResponse{OperationID: op.ID, VMID: vm.ID})
 }
 
-func (h *VMHandlers) ListVMs(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	vms, err := h.vms.ListVMs(r.Context(), u.ID)
+func (h *VMHandlers) ListVMs(c *gin.Context) {
+	u := UserFrom(c)
+	vms, err := h.vms.ListVMs(c.Request.Context(), u.ID)
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, vms)
+	writeData(c, http.StatusOK, vms)
 }
 
-func (h *VMHandlers) GetVM(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	vmID := pathSegment(r, "/v1/vms/")
-	vm, err := h.vms.GetVM(r.Context(), u.ID, vmID)
+func (h *VMHandlers) GetVM(c *gin.Context) {
+	u := UserFrom(c)
+	vm, err := h.vms.GetVM(c.Request.Context(), u.ID, c.Param("id"))
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, vm)
+	writeData(c, http.StatusOK, vm)
 }
 
-func (h *VMHandlers) VMOperation(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	rest := strings.TrimPrefix(r.URL.Path, "/v1/vms/")
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid path")
-		return
-	}
-	vmID := parts[0]
-	action := parts[1]
-	key := r.Header.Get("Idempotency-Key")
+func (h *VMHandlers) VMOperation(c *gin.Context) {
+	u := UserFrom(c)
+	action := c.Param("action")
+	key := c.Request.Header.Get("Idempotency-Key")
 
 	var opType models.OperationType
 	switch action {
@@ -121,38 +114,36 @@ func (h *VMHandlers) VMOperation(w http.ResponseWriter, r *http.Request) {
 	case "reboot":
 		opType = models.OperationReboot
 	default:
-		writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "unknown action")
+		writeError(c, http.StatusNotFound, "RESOURCE_NOT_FOUND", "unknown action")
 		return
 	}
 
-	op, err := h.vms.NewOperation(r.Context(), u.ID, vmID, opType, key)
+	op, err := h.vms.NewOperation(c.Request.Context(), u.ID, c.Param("id"), opType, key)
 	if err != nil {
-		writeVMError(w, err)
+		writeVMError(c, err)
 		return
 	}
-	writeData(w, http.StatusAccepted, opResponse(op))
+	writeData(c, http.StatusAccepted, opResponse(op))
 }
 
-func (h *VMHandlers) DeleteVM(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	vmID := pathSegment(r, "/v1/vms/")
-	op, err := h.vms.NewOperation(r.Context(), u.ID, vmID, models.OperationDelete, r.Header.Get("Idempotency-Key"))
+func (h *VMHandlers) DeleteVM(c *gin.Context) {
+	u := UserFrom(c)
+	op, err := h.vms.NewOperation(c.Request.Context(), u.ID, c.Param("id"), models.OperationDelete, c.Request.Header.Get("Idempotency-Key"))
 	if err != nil {
-		writeVMError(w, err)
+		writeVMError(c, err)
 		return
 	}
-	writeData(w, http.StatusAccepted, opResponse(op))
+	writeData(c, http.StatusAccepted, opResponse(op))
 }
 
-func (h *VMHandlers) GetOperation(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	opID := pathSegment(r, "/v1/operations/")
-	op, err := h.vms.GetOperation(r.Context(), u.ID, opID)
+func (h *VMHandlers) GetOperation(c *gin.Context) {
+	u := UserFrom(c)
+	op, err := h.vms.GetOperation(c.Request.Context(), u.ID, c.Param("id"))
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
-	writeData(w, http.StatusOK, opResponse(op))
+	writeData(c, http.StatusOK, opResponse(op))
 }
 
 func opResponse(op *models.VMOperation) operationResponse {
@@ -168,20 +159,15 @@ func opResponse(op *models.VMOperation) operationResponse {
 }
 
 // writeVMError maps VM service errors to HTTP responses.
-func writeVMError(w http.ResponseWriter, err error) {
+func writeVMError(c *gin.Context, err error) {
 	switch {
 	case err == vms.ErrNoCapacity:
-		writeError(w, http.StatusServiceUnavailable, "NO_CAPACITY", "no node has sufficient capacity")
+		writeError(c, http.StatusServiceUnavailable, "NO_CAPACITY", "no node has sufficient capacity")
 	case err == vms.ErrInvalidState:
-		writeError(w, http.StatusConflict, "INVALID_STATE", "the vm is not in a valid state for this operation")
+		writeError(c, http.StatusConflict, "INVALID_STATE", "the vm is not in a valid state for this operation")
 	case err == vms.ErrBillingRequired:
-		writeError(w, http.StatusPaymentRequired, "BILLING_REQUIRED", "an active subscription is required")
+		writeError(c, http.StatusPaymentRequired, "BILLING_REQUIRED", "an active subscription is required")
 	default:
-		mapError(w, err)
+		mapError(c, err)
 	}
-}
-
-// pathSegment returns the trailing segment after the given prefix.
-func pathSegment(r *http.Request, prefix string) string {
-	return strings.TrimPrefix(r.URL.Path, prefix)
 }

@@ -294,7 +294,11 @@ type CreateVMRequest struct {
 	// Cloud-init configuration.
 	CloudInit *CloudInitConfig `protobuf:"bytes,9,opt,name=cloud_init,json=cloudInit,proto3" json:"cloud_init,omitempty"`
 	// Storage pool name to use. Empty means the node default.
-	StoragePool   string `protobuf:"bytes,10,opt,name=storage_pool,json=storagePool,proto3" json:"storage_pool,omitempty"`
+	StoragePool string `protobuf:"bytes,10,opt,name=storage_pool,json=storagePool,proto3" json:"storage_pool,omitempty"`
+	// Idempotency key supplied by the Control Plane. Retries of the same RPC
+	// carry the same operation_id; the agent deduplicates them so provisioning
+	// is never executed twice.
+	OperationId   string `protobuf:"bytes,11,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -395,6 +399,13 @@ func (x *CreateVMRequest) GetCloudInit() *CloudInitConfig {
 func (x *CreateVMRequest) GetStoragePool() string {
 	if x != nil {
 		return x.StoragePool
+	}
+	return ""
+}
+
+func (x *CreateVMRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
 	}
 	return ""
 }
@@ -717,7 +728,9 @@ type DeleteVMRequest struct {
 	VmId   string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
 	VmName string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
 	// Whether to also delete the disk volumes.
-	DeleteDisk    bool `protobuf:"varint,3,opt,name=delete_disk,json=deleteDisk,proto3" json:"delete_disk,omitempty"`
+	DeleteDisk bool `protobuf:"varint,3,opt,name=delete_disk,json=deleteDisk,proto3" json:"delete_disk,omitempty"`
+	// Idempotency key supplied by the Control Plane (see CreateVMRequest).
+	OperationId   string `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -773,10 +786,19 @@ func (x *DeleteVMRequest) GetDeleteDisk() bool {
 	return false
 }
 
+func (x *DeleteVMRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 type StartVMRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	VmName        string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	VmId   string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	VmName string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	// Idempotency key supplied by the Control Plane (see CreateVMRequest).
+	OperationId   string `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -825,14 +847,23 @@ func (x *StartVMRequest) GetVmName() string {
 	return ""
 }
 
+func (x *StartVMRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 type StopVMRequest struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	VmId   string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
 	VmName string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
 	// Graceful shutdown timeout in seconds before forcing.
 	TimeoutSeconds uint32 `protobuf:"varint,3,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Idempotency key supplied by the Control Plane (see CreateVMRequest).
+	OperationId   string `protobuf:"bytes,4,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StopVMRequest) Reset() {
@@ -886,10 +917,19 @@ func (x *StopVMRequest) GetTimeoutSeconds() uint32 {
 	return 0
 }
 
+func (x *StopVMRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 type ForceStopVMRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	VmName        string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	VmId   string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	VmName string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	// Idempotency key supplied by the Control Plane (see CreateVMRequest).
+	OperationId   string `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -938,10 +978,19 @@ func (x *ForceStopVMRequest) GetVmName() string {
 	return ""
 }
 
+func (x *ForceStopVMRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
 type RebootVMRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	VmName        string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	VmId   string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	VmName string                 `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	// Idempotency key supplied by the Control Plane (see CreateVMRequest).
+	OperationId   string `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -986,6 +1035,13 @@ func (x *RebootVMRequest) GetVmId() string {
 func (x *RebootVMRequest) GetVmName() string {
 	if x != nil {
 		return x.VmName
+	}
+	return ""
+}
+
+func (x *RebootVMRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
 	}
 	return ""
 }
@@ -1042,6 +1098,140 @@ func (x *GetVMRequest) GetVmName() string {
 	return ""
 }
 
+type ListVMsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVMsRequest) Reset() {
+	*x = ListVMsRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVMsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVMsRequest) ProtoMessage() {}
+
+func (x *ListVMsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVMsRequest.ProtoReflect.Descriptor instead.
+func (*ListVMsRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{14}
+}
+
+// VMSummary is a single domain's identity and runtime state.
+type VMSummary struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Libvirt domain name (vps-<instance-id>).
+	VmName        string     `protobuf:"bytes,1,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	State         v1.VMState `protobuf:"varint,2,opt,name=state,proto3,enum=common.v1.VMState" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VMSummary) Reset() {
+	*x = VMSummary{}
+	mi := &file_agent_v1_agent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VMSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VMSummary) ProtoMessage() {}
+
+func (x *VMSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VMSummary.ProtoReflect.Descriptor instead.
+func (*VMSummary) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *VMSummary) GetVmName() string {
+	if x != nil {
+		return x.VmName
+	}
+	return ""
+}
+
+func (x *VMSummary) GetState() v1.VMState {
+	if x != nil {
+		return x.State
+	}
+	return v1.VMState(0)
+}
+
+type ListVMsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vms           []*VMSummary           `protobuf:"bytes,1,rep,name=vms,proto3" json:"vms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVMsResponse) Reset() {
+	*x = ListVMsResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVMsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVMsResponse) ProtoMessage() {}
+
+func (x *ListVMsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVMsResponse.ProtoReflect.Descriptor instead.
+func (*ListVMsResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ListVMsResponse) GetVms() []*VMSummary {
+	if x != nil {
+		return x.Vms
+	}
+	return nil
+}
+
 type VMResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Status        *v1.VMStatus           `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
@@ -1051,7 +1241,7 @@ type VMResponse struct {
 
 func (x *VMResponse) Reset() {
 	*x = VMResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[14]
+	mi := &file_agent_v1_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1063,7 +1253,7 @@ func (x *VMResponse) String() string {
 func (*VMResponse) ProtoMessage() {}
 
 func (x *VMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[14]
+	mi := &file_agent_v1_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1076,7 +1266,7 @@ func (x *VMResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VMResponse.ProtoReflect.Descriptor instead.
 func (*VMResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{14}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *VMResponse) GetStatus() *v1.VMStatus {
@@ -1094,7 +1284,7 @@ type GetNodeStatusRequest struct {
 
 func (x *GetNodeStatusRequest) Reset() {
 	*x = GetNodeStatusRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[15]
+	mi := &file_agent_v1_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1106,7 +1296,7 @@ func (x *GetNodeStatusRequest) String() string {
 func (*GetNodeStatusRequest) ProtoMessage() {}
 
 func (x *GetNodeStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[15]
+	mi := &file_agent_v1_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1119,7 +1309,7 @@ func (x *GetNodeStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetNodeStatusRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{15}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{18}
 }
 
 type NodeStatusResponse struct {
@@ -1131,7 +1321,7 @@ type NodeStatusResponse struct {
 
 func (x *NodeStatusResponse) Reset() {
 	*x = NodeStatusResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	mi := &file_agent_v1_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1143,7 +1333,7 @@ func (x *NodeStatusResponse) String() string {
 func (*NodeStatusResponse) ProtoMessage() {}
 
 func (x *NodeStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	mi := &file_agent_v1_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1156,7 +1346,7 @@ func (x *NodeStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeStatusResponse.ProtoReflect.Descriptor instead.
 func (*NodeStatusResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{16}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *NodeStatusResponse) GetStatus() *v1.NodeStatus {
@@ -1178,7 +1368,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[17]
+	mi := &file_agent_v1_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1190,7 +1380,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[17]
+	mi := &file_agent_v1_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1203,7 +1393,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{17}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *HeartbeatRequest) GetAgentId() string {
@@ -1236,7 +1426,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[18]
+	mi := &file_agent_v1_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1248,7 +1438,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[18]
+	mi := &file_agent_v1_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1261,7 +1451,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{18}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *HeartbeatResponse) GetOk() bool {
@@ -1281,7 +1471,7 @@ type OperationResponse struct {
 
 func (x *OperationResponse) Reset() {
 	*x = OperationResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[19]
+	mi := &file_agent_v1_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1293,7 +1483,7 @@ func (x *OperationResponse) String() string {
 func (*OperationResponse) ProtoMessage() {}
 
 func (x *OperationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[19]
+	mi := &file_agent_v1_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1306,7 +1496,7 @@ func (x *OperationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationResponse.ProtoReflect.Descriptor instead.
 func (*OperationResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{19}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *OperationResponse) GetState() v1.OperationState {
@@ -1347,7 +1537,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"volumeName\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\x12\x1a\n" +
-	"\bwritable\x18\x04 \x01(\bR\bwritable\"\x88\x03\n" +
+	"\bwritable\x18\x04 \x01(\bR\bwritable\"\xab\x03\n" +
 	"\x0fCreateVMRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
 	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12\x1f\n" +
@@ -1363,7 +1553,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"cloud_init\x18\t \x01(\v2\x19.agent.v1.CloudInitConfigR\tcloudInit\x12!\n" +
 	"\fstorage_pool\x18\n" +
-	" \x01(\tR\vstoragePool\"\xb7\x02\n" +
+	" \x01(\tR\vstoragePool\x12!\n" +
+	"\foperation_id\x18\v \x01(\tR\voperationId\"\xb7\x02\n" +
 	"\bImageRef\x12\x19\n" +
 	"\bimage_id\x18\x01 \x01(\tR\aimageId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
@@ -1397,28 +1588,39 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\fipv6_gateway\x18\x05 \x01(\tR\vipv6Gateway\x12\x1f\n" +
 	"\vdns_servers\x18\x06 \x03(\tR\n" +
 	"dnsServers\x12\x12\n" +
-	"\x04cidr\x18\a \x01(\tR\x04cidr\"`\n" +
+	"\x04cidr\x18\a \x01(\tR\x04cidr\"\x83\x01\n" +
 	"\x0fDeleteVMRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
 	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12\x1f\n" +
 	"\vdelete_disk\x18\x03 \x01(\bR\n" +
-	"deleteDisk\">\n" +
+	"deleteDisk\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\"a\n" +
 	"\x0eStartVMRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
-	"\avm_name\x18\x02 \x01(\tR\x06vmName\"f\n" +
+	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\"\x89\x01\n" +
 	"\rStopVMRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
 	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12'\n" +
-	"\x0ftimeout_seconds\x18\x03 \x01(\rR\x0etimeoutSeconds\"B\n" +
+	"\x0ftimeout_seconds\x18\x03 \x01(\rR\x0etimeoutSeconds\x12!\n" +
+	"\foperation_id\x18\x04 \x01(\tR\voperationId\"e\n" +
 	"\x12ForceStopVMRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
-	"\avm_name\x18\x02 \x01(\tR\x06vmName\"?\n" +
+	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\"b\n" +
 	"\x0fRebootVMRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
-	"\avm_name\x18\x02 \x01(\tR\x06vmName\"<\n" +
+	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\"<\n" +
 	"\fGetVMRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
-	"\avm_name\x18\x02 \x01(\tR\x06vmName\"9\n" +
+	"\avm_name\x18\x02 \x01(\tR\x06vmName\"\x10\n" +
+	"\x0eListVMsRequest\"N\n" +
+	"\tVMSummary\x12\x17\n" +
+	"\avm_name\x18\x01 \x01(\tR\x06vmName\x12(\n" +
+	"\x05state\x18\x02 \x01(\x0e2\x12.common.v1.VMStateR\x05state\"8\n" +
+	"\x0fListVMsResponse\x12%\n" +
+	"\x03vms\x18\x01 \x03(\v2\x13.agent.v1.VMSummaryR\x03vms\"9\n" +
 	"\n" +
 	"VMResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.common.v1.VMStatusR\x06status\"\x16\n" +
@@ -1433,7 +1635,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"l\n" +
 	"\x11OperationResponse\x12/\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x19.common.v1.OperationStateR\x05state\x12&\n" +
-	"\x05error\x18\x02 \x01(\v2\x10.common.v1.ErrorR\x05error2\xb6\x05\n" +
+	"\x05error\x18\x02 \x01(\v2\x10.common.v1.ErrorR\x05error2\xf6\x05\n" +
 	"\fAgentService\x12B\n" +
 	"\bCreateVM\x12\x19.agent.v1.CreateVMRequest\x1a\x1b.agent.v1.OperationResponse\x12B\n" +
 	"\bDeleteVM\x12\x19.agent.v1.DeleteVMRequest\x1a\x1b.agent.v1.OperationResponse\x12@\n" +
@@ -1441,7 +1643,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06StopVM\x12\x17.agent.v1.StopVMRequest\x1a\x1b.agent.v1.OperationResponse\x12H\n" +
 	"\vForceStopVM\x12\x1c.agent.v1.ForceStopVMRequest\x1a\x1b.agent.v1.OperationResponse\x12B\n" +
 	"\bRebootVM\x12\x19.agent.v1.RebootVMRequest\x1a\x1b.agent.v1.OperationResponse\x125\n" +
-	"\x05GetVM\x12\x16.agent.v1.GetVMRequest\x1a\x14.agent.v1.VMResponse\x12M\n" +
+	"\x05GetVM\x12\x16.agent.v1.GetVMRequest\x1a\x14.agent.v1.VMResponse\x12>\n" +
+	"\aListVMs\x12\x18.agent.v1.ListVMsRequest\x1a\x19.agent.v1.ListVMsResponse\x12M\n" +
 	"\rGetNodeStatus\x12\x1e.agent.v1.GetNodeStatusRequest\x1a\x1c.agent.v1.NodeStatusResponse\x12D\n" +
 	"\tHeartbeat\x12\x1a.agent.v1.HeartbeatRequest\x1a\x1b.agent.v1.HeartbeatResponse\x12B\n" +
 	"\aConsole\x12\x18.agent.v1.ConsoleRequest\x1a\x19.agent.v1.ConsoleResponse(\x010\x01B4Z2github.com/tuna2134/vps/proto/gen/agent/v1;agentv1b\x06proto3"
@@ -1458,7 +1661,7 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_proto_rawDescData
 }
 
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(*ConsoleRequest)(nil),         // 0: agent.v1.ConsoleRequest
 	(*ConsoleResponse)(nil),        // 1: agent.v1.ConsoleResponse
@@ -1474,52 +1677,60 @@ var file_agent_v1_agent_proto_goTypes = []any{
 	(*ForceStopVMRequest)(nil),     // 11: agent.v1.ForceStopVMRequest
 	(*RebootVMRequest)(nil),        // 12: agent.v1.RebootVMRequest
 	(*GetVMRequest)(nil),           // 13: agent.v1.GetVMRequest
-	(*VMResponse)(nil),             // 14: agent.v1.VMResponse
-	(*GetNodeStatusRequest)(nil),   // 15: agent.v1.GetNodeStatusRequest
-	(*NodeStatusResponse)(nil),     // 16: agent.v1.NodeStatusResponse
-	(*HeartbeatRequest)(nil),       // 17: agent.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),      // 18: agent.v1.HeartbeatResponse
-	(*OperationResponse)(nil),      // 19: agent.v1.OperationResponse
-	(*v1.VMStatus)(nil),            // 20: common.v1.VMStatus
-	(*v1.NodeStatus)(nil),          // 21: common.v1.NodeStatus
-	(v1.OperationState)(0),         // 22: common.v1.OperationState
-	(*v1.Error)(nil),               // 23: common.v1.Error
+	(*ListVMsRequest)(nil),         // 14: agent.v1.ListVMsRequest
+	(*VMSummary)(nil),              // 15: agent.v1.VMSummary
+	(*ListVMsResponse)(nil),        // 16: agent.v1.ListVMsResponse
+	(*VMResponse)(nil),             // 17: agent.v1.VMResponse
+	(*GetNodeStatusRequest)(nil),   // 18: agent.v1.GetNodeStatusRequest
+	(*NodeStatusResponse)(nil),     // 19: agent.v1.NodeStatusResponse
+	(*HeartbeatRequest)(nil),       // 20: agent.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),      // 21: agent.v1.HeartbeatResponse
+	(*OperationResponse)(nil),      // 22: agent.v1.OperationResponse
+	(v1.VMState)(0),                // 23: common.v1.VMState
+	(*v1.VMStatus)(nil),            // 24: common.v1.VMStatus
+	(*v1.NodeStatus)(nil),          // 25: common.v1.NodeStatus
+	(v1.OperationState)(0),         // 26: common.v1.OperationState
+	(*v1.Error)(nil),               // 27: common.v1.Error
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
 	5,  // 0: agent.v1.CreateVMRequest.image:type_name -> agent.v1.ImageRef
 	2,  // 1: agent.v1.CreateVMRequest.interfaces:type_name -> agent.v1.NetworkInterfaceConfig
 	6,  // 2: agent.v1.CreateVMRequest.cloud_init:type_name -> agent.v1.CloudInitConfig
 	7,  // 3: agent.v1.CloudInitConfig.networks:type_name -> agent.v1.NetworkConfig
-	20, // 4: agent.v1.VMResponse.status:type_name -> common.v1.VMStatus
-	21, // 5: agent.v1.NodeStatusResponse.status:type_name -> common.v1.NodeStatus
-	21, // 6: agent.v1.HeartbeatRequest.status:type_name -> common.v1.NodeStatus
-	22, // 7: agent.v1.OperationResponse.state:type_name -> common.v1.OperationState
-	23, // 8: agent.v1.OperationResponse.error:type_name -> common.v1.Error
-	4,  // 9: agent.v1.AgentService.CreateVM:input_type -> agent.v1.CreateVMRequest
-	8,  // 10: agent.v1.AgentService.DeleteVM:input_type -> agent.v1.DeleteVMRequest
-	9,  // 11: agent.v1.AgentService.StartVM:input_type -> agent.v1.StartVMRequest
-	10, // 12: agent.v1.AgentService.StopVM:input_type -> agent.v1.StopVMRequest
-	11, // 13: agent.v1.AgentService.ForceStopVM:input_type -> agent.v1.ForceStopVMRequest
-	12, // 14: agent.v1.AgentService.RebootVM:input_type -> agent.v1.RebootVMRequest
-	13, // 15: agent.v1.AgentService.GetVM:input_type -> agent.v1.GetVMRequest
-	15, // 16: agent.v1.AgentService.GetNodeStatus:input_type -> agent.v1.GetNodeStatusRequest
-	17, // 17: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	0,  // 18: agent.v1.AgentService.Console:input_type -> agent.v1.ConsoleRequest
-	19, // 19: agent.v1.AgentService.CreateVM:output_type -> agent.v1.OperationResponse
-	19, // 20: agent.v1.AgentService.DeleteVM:output_type -> agent.v1.OperationResponse
-	19, // 21: agent.v1.AgentService.StartVM:output_type -> agent.v1.OperationResponse
-	19, // 22: agent.v1.AgentService.StopVM:output_type -> agent.v1.OperationResponse
-	19, // 23: agent.v1.AgentService.ForceStopVM:output_type -> agent.v1.OperationResponse
-	19, // 24: agent.v1.AgentService.RebootVM:output_type -> agent.v1.OperationResponse
-	14, // 25: agent.v1.AgentService.GetVM:output_type -> agent.v1.VMResponse
-	16, // 26: agent.v1.AgentService.GetNodeStatus:output_type -> agent.v1.NodeStatusResponse
-	18, // 27: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	1,  // 28: agent.v1.AgentService.Console:output_type -> agent.v1.ConsoleResponse
-	19, // [19:29] is the sub-list for method output_type
-	9,  // [9:19] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	23, // 4: agent.v1.VMSummary.state:type_name -> common.v1.VMState
+	15, // 5: agent.v1.ListVMsResponse.vms:type_name -> agent.v1.VMSummary
+	24, // 6: agent.v1.VMResponse.status:type_name -> common.v1.VMStatus
+	25, // 7: agent.v1.NodeStatusResponse.status:type_name -> common.v1.NodeStatus
+	25, // 8: agent.v1.HeartbeatRequest.status:type_name -> common.v1.NodeStatus
+	26, // 9: agent.v1.OperationResponse.state:type_name -> common.v1.OperationState
+	27, // 10: agent.v1.OperationResponse.error:type_name -> common.v1.Error
+	4,  // 11: agent.v1.AgentService.CreateVM:input_type -> agent.v1.CreateVMRequest
+	8,  // 12: agent.v1.AgentService.DeleteVM:input_type -> agent.v1.DeleteVMRequest
+	9,  // 13: agent.v1.AgentService.StartVM:input_type -> agent.v1.StartVMRequest
+	10, // 14: agent.v1.AgentService.StopVM:input_type -> agent.v1.StopVMRequest
+	11, // 15: agent.v1.AgentService.ForceStopVM:input_type -> agent.v1.ForceStopVMRequest
+	12, // 16: agent.v1.AgentService.RebootVM:input_type -> agent.v1.RebootVMRequest
+	13, // 17: agent.v1.AgentService.GetVM:input_type -> agent.v1.GetVMRequest
+	14, // 18: agent.v1.AgentService.ListVMs:input_type -> agent.v1.ListVMsRequest
+	18, // 19: agent.v1.AgentService.GetNodeStatus:input_type -> agent.v1.GetNodeStatusRequest
+	20, // 20: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	0,  // 21: agent.v1.AgentService.Console:input_type -> agent.v1.ConsoleRequest
+	22, // 22: agent.v1.AgentService.CreateVM:output_type -> agent.v1.OperationResponse
+	22, // 23: agent.v1.AgentService.DeleteVM:output_type -> agent.v1.OperationResponse
+	22, // 24: agent.v1.AgentService.StartVM:output_type -> agent.v1.OperationResponse
+	22, // 25: agent.v1.AgentService.StopVM:output_type -> agent.v1.OperationResponse
+	22, // 26: agent.v1.AgentService.ForceStopVM:output_type -> agent.v1.OperationResponse
+	22, // 27: agent.v1.AgentService.RebootVM:output_type -> agent.v1.OperationResponse
+	17, // 28: agent.v1.AgentService.GetVM:output_type -> agent.v1.VMResponse
+	16, // 29: agent.v1.AgentService.ListVMs:output_type -> agent.v1.ListVMsResponse
+	19, // 30: agent.v1.AgentService.GetNodeStatus:output_type -> agent.v1.NodeStatusResponse
+	21, // 31: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	1,  // 32: agent.v1.AgentService.Console:output_type -> agent.v1.ConsoleResponse
+	22, // [22:33] is the sub-list for method output_type
+	11, // [11:22] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -1533,7 +1744,7 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   20,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

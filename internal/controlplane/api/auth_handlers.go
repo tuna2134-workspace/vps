@@ -3,9 +3,11 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strings"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
+	"github.com/tuna2134/vps/internal/controlplane/proxytrust"
 	"github.com/tuna2134/vps/internal/controlplane/users"
 )
 
@@ -31,19 +33,20 @@ type registerResponse struct {
 // AuthHandlers exposes authentication endpoints.
 type AuthHandlers struct {
 	users *users.Service
+	trust *proxytrust.ProxyTrust
 }
 
-func NewAuthHandlers(userSvc *users.Service) *AuthHandlers {
-	return &AuthHandlers{users: userSvc}
+func NewAuthHandlers(userSvc *users.Service, trust *proxytrust.ProxyTrust) *AuthHandlers {
+	return &AuthHandlers{users: userSvc, trust: trust}
 }
 
-func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandlers) Register(c *gin.Context) {
 	var req registerRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
-	u, err := h.users.Register(r.Context(), users.RegistrationRequest{
+	u, err := h.users.Register(c.Request.Context(), users.RegistrationRequest{
 		Email:        req.Email,
 		Password:     req.Password,
 		FirstName:    req.FirstName,
@@ -59,13 +62,13 @@ func (h *AuthHandlers) Register(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, users.ErrEmailTaken):
-			writeError(w, http.StatusConflict, "EMAIL_TAKEN", "email already registered")
+			writeError(c, http.StatusConflict, "EMAIL_TAKEN", "email already registered")
 		default:
-			writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+			writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
 		return
 	}
-	writeData(w, http.StatusCreated, registerResponse{ID: u.ID, Email: u.Email})
+	writeData(c, http.StatusCreated, registerResponse{ID: u.ID, Email: u.Email})
 }
 
 type loginRequest struct {
@@ -78,43 +81,43 @@ type loginResponse struct {
 	Expiry string `json:"expires_at"`
 }
 
-func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandlers) Login(c *gin.Context) {
 	var req loginRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
-	res, err := h.users.Login(r.Context(), req.Email, req.Password, remoteIP(r), r.UserAgent())
+	res, err := h.users.Login(c.Request.Context(), req.Email, req.Password, clientIP(h.trust, c.Request).String(), c.Request.UserAgent())
 	if err != nil {
 		switch {
 		case errors.Is(err, users.ErrTooManyAttempts):
-			writeError(w, http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "too many failed login attempts")
+			writeError(c, http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", "too many failed login attempts")
 		case errors.Is(err, users.ErrInvalidCredentials):
-			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
+			writeError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password")
 		case errors.Is(err, users.ErrAccountDisabled):
-			writeError(w, http.StatusForbidden, "ACCOUNT_DISABLED", "account is disabled")
+			writeError(c, http.StatusForbidden, "ACCOUNT_DISABLED", "account is disabled")
 		default:
-			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
+			writeError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
 		}
 		return
 	}
-	writeData(w, http.StatusOK, loginResponse{
+	writeData(c, http.StatusOK, loginResponse{
 		Token:  res.Token,
 		Expiry: res.Session.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
 	})
 }
 
-func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
-	token := bearerToken(r)
+func (h *AuthHandlers) Logout(c *gin.Context) {
+	token := bearerToken(c.Request)
 	if token == "" {
-		writeError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing bearer token")
+		writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "missing bearer token")
 		return
 	}
-	if err := h.users.Logout(r.Context(), token); err != nil {
-		mapError(w, err)
+	if err := h.users.Logout(c.Request.Context(), token); err != nil {
+		mapError(c, err)
 		return
 	}
-	writeEmpty(w)
+	writeEmpty(c)
 }
 
 // sessionResponse is the public view of a session. The token hash is NEVER
@@ -148,42 +151,42 @@ func toSessionResponse(s models.Session) sessionResponse {
 	}
 }
 
-func (h *AuthHandlers) ListSessions(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	sessions, err := h.users.ListSessions(r.Context(), u.ID)
+func (h *AuthHandlers) ListSessions(c *gin.Context) {
+	u := UserFrom(c)
+	sessions, err := h.users.ListSessions(c.Request.Context(), u.ID)
 	if err != nil {
-		mapError(w, err)
+		mapError(c, err)
 		return
 	}
 	out := make([]sessionResponse, 0, len(sessions))
 	for _, s := range sessions {
 		out = append(out, toSessionResponse(s))
 	}
-	writeData(w, http.StatusOK, out)
+	writeData(c, http.StatusOK, out)
 }
 
-func (h *AuthHandlers) RevokeSession(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	sessionID := strings.TrimPrefix(r.URL.Path, "/v1/auth/sessions/")
+func (h *AuthHandlers) RevokeSession(c *gin.Context) {
+	u := UserFrom(c)
+	sessionID := c.Param("id")
 	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "missing session id")
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "missing session id")
 		return
 	}
-	if err := h.users.RevokeSession(r.Context(), u.ID, sessionID); err != nil {
-		mapError(w, err)
+	if err := h.users.RevokeSession(c.Request.Context(), u.ID, sessionID); err != nil {
+		mapError(c, err)
 		return
 	}
-	writeEmpty(w)
+	writeEmpty(c)
 }
 
-func (h *AuthHandlers) RevokeAllSessions(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	sess := SessionFrom(r.Context())
-	if err := h.users.RevokeAllSessions(r.Context(), u.ID, sess.ID); err != nil {
-		mapError(w, err)
+func (h *AuthHandlers) RevokeAllSessions(c *gin.Context) {
+	u := UserFrom(c)
+	sess := SessionFrom(c)
+	if err := h.users.RevokeAllSessions(c.Request.Context(), u.ID, sess.ID); err != nil {
+		mapError(c, err)
 		return
 	}
-	writeEmpty(w)
+	writeEmpty(c)
 }
 
 type changePasswordRequest struct {
@@ -191,25 +194,25 @@ type changePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
-func (h *AuthHandlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	sess := SessionFrom(r.Context())
+func (h *AuthHandlers) ChangePassword(c *gin.Context) {
+	u := UserFrom(c)
+	sess := SessionFrom(c)
 	var req changePasswordRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
-	if err := h.users.ChangePassword(r.Context(), u.ID, req.CurrentPassword, req.NewPassword); err != nil {
+	if err := h.users.ChangePassword(c.Request.Context(), u.ID, req.CurrentPassword, req.NewPassword); err != nil {
 		if errors.Is(err, users.ErrInvalidCredentials) {
-			writeError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "current password is incorrect")
+			writeError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "current password is incorrect")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		writeError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		return
 	}
 	// Invalidate all other sessions on password change.
-	_ = h.users.RevokeAllSessions(r.Context(), u.ID, sess.ID)
-	writeEmpty(w)
+	_ = h.users.RevokeAllSessions(c.Request.Context(), u.ID, sess.ID)
+	writeEmpty(c)
 }
 
 type userResponse struct {
@@ -222,14 +225,14 @@ type userResponse struct {
 	Roles     []string `json:"roles"`
 }
 
-func (h *AuthHandlers) Me(w http.ResponseWriter, r *http.Request) {
-	u := UserFrom(r.Context())
-	roles := RolesFrom(r.Context())
+func (h *AuthHandlers) Me(c *gin.Context) {
+	u := UserFrom(c)
+	roles := RolesFrom(c)
 	roleNames := make([]string, 0, len(roles))
 	for _, role := range roles {
 		roleNames = append(roleNames, string(role))
 	}
-	writeData(w, http.StatusOK, userResponse{
+	writeData(c, http.StatusOK, userResponse{
 		ID:        u.ID,
 		Email:     u.Email,
 		FirstName: u.FirstName,

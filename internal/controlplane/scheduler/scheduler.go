@@ -1,14 +1,15 @@
-// Package scheduler selects an agent node for a new VM based on resource
-// capacity and health. It is deliberately decoupled from the Agent gRPC layer.
+// Package scheduler selects an agent node for a new VM based on CPU, memory,
+// and storage accounting and node health. Selection happens atomically with a
+// resource reservation so concurrent provisioning can never over-allocate.
 package scheduler
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/tuna2134/vps/internal/controlplane/models"
+	"github.com/tuna2134/vps/internal/controlplane/repositories"
 )
 
 var (
@@ -37,17 +38,57 @@ type VMCounter interface {
 
 // Scheduler picks the most suitable node for a placement request.
 type Scheduler struct {
-	nodes NodeSource
-	vms   VMCounter
+	nodes        NodeSource
+	vms          VMCounter
+	reservations *repositories.ResourceReservationRepository
 }
 
-func New(nodes NodeSource, vms VMCounter) *Scheduler {
-	return &Scheduler{nodes: nodes, vms: vms}
+// New builds a scheduler. res must be non-nil to enable atomic reservation.
+func New(nodes NodeSource, vms VMCounter, res *repositories.ResourceReservationRepository) *Scheduler {
+	return &Scheduler{nodes: nodes, vms: vms, reservations: res}
 }
 
-// Select chooses a node. The decision considers CPU, memory, storage capacity
-// and node health. The scoring function is isolated so affinity/anti-affinity,
-// geographic location, and overcommit policies can be added later.
+// Reserve atomically selects a node for the request and reserves its capacity
+// for vmID. The reservation is released on provisioning failure and committed
+// on success.
+func (s *Scheduler) Reserve(ctx context.Context, vmID string, req Request) (*models.Node, error) {
+	if s.reservations == nil {
+		return nil, errors.New("scheduler has no reservation store")
+	}
+	node, _, err := s.reservations.Reserve(ctx, models.ReservationRequest{
+		VMID:         vmID,
+		ClusterID:    req.ClusterID,
+		VCPU:         req.VCPU,
+		MemoryBytes:  int64(req.MemoryMB) * 1024 * 1024,
+		StorageBytes: int64(req.DiskGB) * 1024 * 1024 * 1024,
+	})
+	if err != nil {
+		if errors.Is(err, repositories.ErrNoCapacity) {
+			return nil, ErrNoCapacity
+		}
+		return nil, err
+	}
+	return node, nil
+}
+
+// Commit marks the reservation for vmID committed after provisioning.
+func (s *Scheduler) Commit(ctx context.Context, vmID string) error {
+	if s.reservations == nil {
+		return nil
+	}
+	return s.reservations.Commit(ctx, vmID)
+}
+
+// Release frees the reservation for vmID (provisioning failed or VM removed).
+func (s *Scheduler) Release(ctx context.Context, vmID string) error {
+	if s.reservations == nil {
+		return nil
+	}
+	return s.reservations.Release(ctx, vmID)
+}
+
+// Select chooses a node using the same accounting rules but WITHOUT reserving
+// capacity. It is used for reporting/preview; CreateVM should call Reserve.
 func (s *Scheduler) Select(ctx context.Context, req Request) (*models.Node, error) {
 	nodes, err := s.nodes.ListHealthy(ctx)
 	if err != nil {
@@ -68,56 +109,55 @@ func (s *Scheduler) Select(ctx context.Context, req Request) (*models.Node, erro
 		if req.ClusterID != "" && n.ClusterID != req.ClusterID {
 			continue
 		}
-		fit, score := s.score(ctx, n, req)
-		if fit {
-			candidates = append(candidates, candidate{node: n, score: score})
+		if !s.fits(n, req) {
+			continue
 		}
+		candidates = append(candidates, candidate{node: n, score: utilizationScore(n)})
 	}
 	if len(candidates) == 0 {
 		return nil, ErrNoCapacity
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].score < candidates[j].score // lowest utilization wins
-	})
-	return candidates[0].node, nil
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.score < best.score {
+			best = c
+		}
+	}
+	return best.node, nil
 }
 
-// score returns whether the node fits and a utilization score (lower is
-// better). Extend this with overcommit ratios etc. as needed.
-func (s *Scheduler) score(ctx context.Context, n *models.Node, req Request) (bool, float64) {
-	if n.Status != models.NodeStatusHealthy && n.Status != models.NodeStatusDegraded {
-		return false, 0
+// fits applies the accounting rules without taking reservations into account
+// (approximation used by Select).
+func (s *Scheduler) fits(n *models.Node, req Request) bool {
+	cores := n.PhysicalCores
+	if cores <= 0 {
+		cores = n.CPUCapacity
 	}
-	if n.CPUCapacity <= 0 {
-		return false, 0
+	ratio := n.CPUOvercommitRatio
+	if ratio <= 0 {
+		ratio = 1.0
 	}
+	if float64(req.VCPU) > float64(cores)*ratio {
+		return false
+	}
+	if int64(req.MemoryMB) > n.MemoryCapacityMB {
+		return false
+	}
+	if int64(req.DiskGB)*1024*1024*1024 > n.StorageFreeBytes {
+		return false
+	}
+	return n.Status == models.NodeStatusHealthy || n.Status == models.NodeStatusDegraded
+}
 
-	memoryMB := int64(req.MemoryMB)
-	if memoryMB <= 0 || memoryMB > n.MemoryCapacityMB {
-		return false, 0
-	}
-	if int64(req.DiskGB) <= 0 || int64(req.DiskGB) > n.StorageCapacityGB {
-		return false, 0
-	}
-
-	cpuUtil := n.CPUUsagePercent
-	memUtil := n.MemoryUsagePercent
-	if memUtil <= 0 {
-		memUtil = float64(memoryMB) / float64(n.MemoryCapacityMB) * 100
-	}
-
-	// A node is disqualified if adding this VM would exceed its memory.
-	usedMemMB := float64(n.MemoryCapacityMB) * memUtil / 100
-	if usedMemMB+float64(memoryMB) > float64(n.MemoryCapacityMB) {
-		return false, 0
-	}
-
-	score := cpuUtil*0.4 + memUtil*0.4
+// utilizationScore is a coarse scheduling score (lower is better). CPU usage
+// is used only as a tie-breaker; placement capacity is decided by accounting.
+func utilizationScore(n *models.Node) float64 {
+	score := n.CPUUsagePercent*0.4 + n.MemoryUsagePercent*0.4
 	if n.Status == models.NodeStatusDegraded {
-		score += 100 // prefer healthy nodes
+		score += 100
 	}
-	return true, score
+	return score
 }
 
 // UtilizationSummary is a helper for admin tooling.

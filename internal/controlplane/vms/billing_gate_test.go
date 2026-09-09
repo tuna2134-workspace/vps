@@ -139,3 +139,50 @@ func TestCreateBlockedWhenNoGate(t *testing.T) {
 		t.Errorf("create must fail closed without a billing gate, got %v", err)
 	}
 }
+
+// TestIdempotencyKeyScopedPerUser verifies one user's idempotency key can
+// never resolve another user's operation (cross-user leak fix).
+func TestIdempotencyKeyScopedPerUser(t *testing.T) {
+	ctx := context.Background()
+
+	// User A's operation exists for the shared key.
+	seedOps := map[string]*models.VMOperation{}
+	opA, err := (&opTestStore{ops: seedOps}).Create(ctx, &models.VMOperation{
+		VMID:           "vm-1",
+		OperationType:  models.OperationStart,
+		IdempotencyKey: idempotencyKeyFor("u-1", "shared-key"),
+	})
+	if err != nil {
+		t.Fatalf("seed op: %v", err)
+	}
+
+	// The same user retrying gets their own op back (idempotency preserved).
+	svcA := &Service{
+		provisioner: &Provisioner{jobs: make(chan ProvisionJob, 8), stop: make(chan struct{})},
+		billingGate: func(ctx context.Context, userID string) (bool, error) { return true, nil },
+		vms:         &billingTestStore{vm: &models.VM{ID: "vm-1", UserID: "u-1", Status: models.VMStatusStopped}},
+		ops:         &opTestStore{ops: seedOps},
+	}
+	gotA, err := svcA.NewOperation(ctx, "u-1", "vm-1", models.OperationStart, "shared-key")
+	if err != nil {
+		t.Fatalf("user A retry failed: %v", err)
+	}
+	if gotA.ID != opA.ID {
+		t.Fatalf("user A retry must return the original op, got %q want %q", gotA.ID, opA.ID)
+	}
+
+	// A different user replaying the key must NOT resolve user A's op.
+	svcB := &Service{
+		provisioner: &Provisioner{jobs: make(chan ProvisionJob, 8), stop: make(chan struct{})},
+		billingGate: func(ctx context.Context, userID string) (bool, error) { return true, nil },
+		vms:         &billingTestStore{vm: &models.VM{ID: "vm-1", UserID: "u-1", Status: models.VMStatusStopped}},
+		ops:         &opTestStore{ops: seedOps},
+	}
+	gotB, err := svcB.NewOperation(ctx, "u-2", "vm-1", models.OperationStart, "shared-key")
+	if err == nil {
+		t.Fatalf("user B must not see user A's op, got %q", gotB.ID)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("user B should hit ownership check (ErrNotFound), got %v", err)
+	}
+}
